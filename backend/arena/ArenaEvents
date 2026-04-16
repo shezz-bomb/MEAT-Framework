@@ -1,0 +1,138 @@
+--!strict
+local ArenaEvents = {}
+local Players        = game:GetService("Players")
+local RS             = game:GetService("ReplicatedStorage")
+local CypherManager  = require(script.Parent.Parent.CypherManager)
+local RelicsManager  = require(script.Parent.Parent.Economy.RelicsManager)
+
+type ArenaEvent = {
+	name: string,
+	description: string,
+	duration: number,
+	onStart: (() -> ())?,
+	onTick: (() -> ())?,
+	onEnd: (() -> ())?,
+}
+
+local function safeArena(): Model?
+	return workspace:FindFirstChild("ArenaDelVeredicto") :: Model?
+end
+
+local EVENTS: {ArenaEvent} = {
+	{
+		name = "🔥 SUELO DE LAVA",
+		description = "El suelo se vuelve lava. Saltad, insensatos.",
+		duration = 30,
+		onStart = function()
+			local arena = safeArena()
+			local suelo = arena and arena:FindFirstChild("Suelo") :: BasePart?
+			if suelo then
+				suelo.Material = Enum.Material.Neon
+				suelo.BrickColor = BrickColor.new("Bright red")
+			end
+		end,
+		onTick = function()
+			for _, player in ipairs(Players:GetPlayers()) do
+				local char = player.Character
+				if char then
+					local root = char:FindFirstChild("HumanoidRootPart") :: BasePart?
+					local hum  = char:FindFirstChildOfClass("Humanoid")
+					if root and hum and root.Position.Y < 5 then
+						hum:TakeDamage(5)
+					end
+				end
+			end
+		end,
+		onEnd = function()
+			local arena = safeArena()
+			local suelo = arena and arena:FindFirstChild("Suelo") :: BasePart?
+			if suelo then
+				suelo.Material = Enum.Material.SmoothPlastic
+				suelo.BrickColor = BrickColor.new("Dark stone grey")
+			end
+		end,
+	},
+	{
+		name = "🌀 GRAVEDAD CERO",
+		description = "Todos flotan. El combate se vuelve caos.",
+		duration = 20,
+		onStart  = function() workspace.Gravity = 12 end,
+		onEnd    = function() workspace.Gravity = 196.2 end,
+	},
+	{
+		name = "👁️ LLUVIA DE CIPHERS",
+		description = "Poderes nuevos cada 5 segundos.",
+		duration = 45,
+		onStart = function() end,
+		onEnd   = function() end,
+	},
+}
+
+local currentEvent: ArenaEvent? = nil
+local eventEndTime = 0
+
+local function broadcast(message: string)
+	local msg = Instance.new("Message")
+	msg.Text = message
+	msg.Parent = workspace
+	task.delay(5, function()
+		if msg and msg.Parent then msg:Destroy() end
+	end)
+end
+
+function ArenaEvents:init()
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			local ev = currentEvent
+			if ev then
+				if tick() < eventEndTime then
+					if ev.onTick then
+						local ok, err = pcall(ev.onTick)
+						if not ok then warn("ArenaEvent onTick error:", err) end
+					end
+				else
+					if ev.onEnd then pcall(ev.onEnd) end
+					currentEvent = nil
+					broadcast("🕊️ El veredicto ha terminado.")
+				end
+			else
+				-- ~1 evento cada 20 minutos
+				if math.random() < (1/1200) then
+					self:startRandomEvent()
+				end
+			end
+		end
+	end)
+end
+
+function ArenaEvents:startRandomEvent()
+	local event = EVENTS[math.random(#EVENTS)]
+	currentEvent = event
+	eventEndTime = tick() + event.duration
+	if event.onStart then pcall(event.onStart) end
+	broadcast("⚡ EVENTO: " .. event.name)
+	broadcast(event.description)
+	for _, player in ipairs(Players:GetPlayers()) do
+		RelicsManager:giveRelic(player, "CarneDeQu", 1)
+	end
+end
+
+function ArenaEvents:forceEvent(eventName: string)
+	for _, event in ipairs(EVENTS) do
+		if event.name == eventName then
+			if currentEvent and currentEvent.onEnd then pcall(currentEvent.onEnd) end
+			currentEvent = event
+			eventEndTime = tick() + event.duration
+			if event.onStart then pcall(event.onStart) end
+			broadcast("⚡ EVENTO FORZADO: " .. event.name)
+			return
+		end
+	end
+end
+
+function ArenaEvents:getCurrentEvent(): ArenaEvent?
+	return currentEvent
+end
+
+return ArenaEvents
