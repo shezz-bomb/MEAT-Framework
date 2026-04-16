@@ -1,0 +1,214 @@
+-- CypherManager — Sistema de Slots de Poderes (v2 con sandbox)
+local Players          = game:GetService("Players")
+local RS               = game:GetService("ReplicatedStorage")
+local SSS              = game:GetService("ServerScriptService")
+local RunService       = game:GetService("RunService")
+
+local PowerSlotsUpdate = RS:WaitForChild("PowerSlotsUpdate")
+local UseSlotEvent     = RS:WaitForChild("UseSlotEvent")
+local CypherVFXEvent   = RS:WaitForChild("CypherVFXEvent")
+
+local CypherPool    = SSS.Core.CypherPool
+local UniversalPool = require(CypherPool.UniversalPool)
+
+local CATEGORIES = {"BURST","AOE","CC","MOVILIDAD","DEFENSIVOS","UTILITY","TRAP"}
+local loadedPowers = {}
+
+-- Sandbox: reemplaza funciones de cliente con no-ops en el servidor
+local function makeSandboxedEnv()
+    local fakeRunService = setmetatable({}, {
+        __index = function(_, key)
+            if key == "RenderStepped" then
+                -- Devolver un evento falso que nunca dispara
+                return {
+                    Connect = function() return {Disconnect = function() end} end,
+                    Wait    = function() task.wait(0.016) end,
+                }
+            end
+            return RunService[key]
+        end
+    })
+    return fakeRunService
+end
+
+-- Cargar todos los poderes
+local function loadAllPowers()
+math.randomseed(tick() + os.clock() * 1000) -- semilla única por servidor
+math.randomseed(tick() + os.clock() * 1000) -- semilla aleatoria única por servidor()
+    for _, catName in ipairs(CATEGORIES) do
+        local folder = CypherPool:FindFirstChild(catName)
+        if not folder then continue end
+        for _, mod in ipairs(folder:GetChildren()) do
+            if mod.ClassName ~= "ModuleScript" then continue end
+            local ok, data = pcall(require, mod)
+            if ok and type(data) == "table" and data.onUse and data.name then
+                loadedPowers[mod.Name] = data
+            end
+        end
+    end
+    local count = 0
+    for _ in pairs(loadedPowers) do count = count + 1 end
+    print("✅ CypherManager: " .. count .. " poderes cargados")
+end
+
+loadAllPowers()
+math.randomseed(tick() + os.clock() * 1000) -- semilla única por servidor
+
+local playerSlots = {}
+local SLOT_COUNT  = 4
+
+local function getAvailableNames()
+    local available = {}
+    for _, name in ipairs(UniversalPool) do
+        if loadedPowers[name] then
+            available[#available + 1] = name
+        end
+    end
+    return available
+end
+
+local function pickRandom(n)
+    local pool = getAvailableNames()
+    for i = #pool, 2, -1 do
+        local j = math.random(1, i)
+        pool[i], pool[j] = pool[j], pool[i]
+    end
+    local chosen = {}
+    for i = 1, math.min(n, #pool) do
+        chosen[i] = pool[i]
+    end
+    return chosen
+end
+
+local function buildSlotData(entry)
+    if not entry then return nil end
+    local power = loadedPowers[entry.name]
+    if not power then return nil end
+    return {
+        name        = power.name        or entry.name,
+        description = power.description or "",
+        icon        = power.icon        or "",
+        cooldown    = power.cooldown    or 10,
+        cdRemaining = math.max(0, entry.cooldownEnd - tick()),
+    }
+end
+
+local function syncSlots(player)
+    local slots = playerSlots[player]
+    if not slots then return end
+    PowerSlotsUpdate:FireClient(player,
+        buildSlotData(slots[1]),
+        buildSlotData(slots[2]),
+        buildSlotData(slots[3]),
+        buildSlotData(slots[4])
+    )
+end
+
+local function assignSlots(player)
+    local names = pickRandom(SLOT_COUNT)
+    local slots  = {}
+    for i = 1, SLOT_COUNT do
+        slots[i] = names[i] and {name = names[i], cooldownEnd = 0} or nil
+    end
+    playerSlots[player] = slots
+    syncSlots(player)
+    print("⚡ Slots asignados a " .. player.Name .. ": " .. table.concat(names, ", "))
+end
+
+local function removeFromSlot(player, slotIndex)
+    local slots = playerSlots[player]
+    if not slots then return end
+    slots[slotIndex] = nil
+    syncSlots(player)
+end
+
+-- Usar slot: ejecutar con pcall para capturar errores de cliente en servidor
+UseSlotEvent.OnServerEvent:Connect(function(player, slotIndex)
+    local slots = playerSlots[player]
+    if not slots then return end
+    local entry = slots[slotIndex]
+    if not entry then return end
+    local power = loadedPowers[entry.name]
+    if not power then return end
+
+    if tick() < entry.cooldownEnd then return end
+    if player:GetAttribute("Silenced") then return end
+    entry.cooldownEnd = tick() + (power.cooldown or 10)
+
+    -- Notificar al cliente que ejecute VFX de este poder
+    CypherVFXEvent:FireClient(player, entry.name)
+
+    -- Ejecutar lógica de servidor (daño, efectos server-side)
+    local ok, err = pcall(power.onUse, player)
+    if not ok and not err:find("RenderStepped") and not err:find("BlurEffect") and not err:find("ColorCorrection") then
+        warn("⚡ Error en poder " .. entry.name .. ": " .. tostring(err))
+    end
+
+    syncSlots(player)
+end)
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        task.wait(1.5)
+        assignSlots(player)
+    end)
+end)
+
+for _, player in ipairs(Players:GetPlayers()) do
+    if player.Character then
+        task.delay(1.5, function() assignSlots(player) end)
+    end
+end
+
+-- ============================================
+-- SISTEMA DE ROTACION DE PODERES (cada 60s)
+-- ============================================
+local ROTATION_INTERVAL = 60 -- segundos entre rotaciones
+local rotationCount = 0
+
+local function rotateAllPlayers()
+    rotationCount = rotationCount + 1
+    local players = game:GetService("Players"):GetPlayers()
+    print("🔄 ROTACION #" .. rotationCount .. " — rotando poderes para " .. #players .. " jugadores")
+    
+    for _, player in ipairs(players) do
+        local slots = playerSlots[player]
+        if not slots then continue end
+        
+        local activeCooldowns = {}
+        for i, entry in pairs(slots) do
+            if entry and tick() < entry.cooldownEnd then
+                activeCooldowns[i] = entry.cooldownEnd
+            end
+        end
+        
+        local names = pickRandom(SLOT_COUNT)
+        for i = 1, SLOT_COUNT do
+            slots[i] = names[i] and {
+                name = names[i],
+                cooldownEnd = activeCooldowns[i] or 0
+            } or nil
+        end
+        
+        syncSlots(player)
+        print("⚡ " .. player.Name .. " recibio: " .. table.concat(names, ", "))
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(ROTATION_INTERVAL)
+        rotateAllPlayers()
+    end
+end)
+
+print("✅ Sistema de rotacion iniciado — rota cada " .. ROTATION_INTERVAL .. "s")
+
+return {
+    assignSlots         = assignSlots,
+    removeFromSlot      = removeFromSlot,
+    syncSlots           = syncSlots,
+    getSlots            = function(player) return playerSlots[player] end,
+    assignRandomLoadout = rotateAllPlayers,
+    rotateAllPlayers    = rotateAllPlayers,
+}
