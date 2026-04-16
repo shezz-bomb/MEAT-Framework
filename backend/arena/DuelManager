@@ -1,0 +1,291 @@
+-- DuelManager — MEAT Project
+-- Sistema de duelos 1v1 con apuesta, aceptación, timeout y resolución limpia.
+
+local DuelManager = {}
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+
+-- Estado de duelos activos
+-- [player] = { state = "pending"|"active", opponent, bet, conns = {} }
+local duels = {}
+
+local CHALLENGE_TIMEOUT = 20   -- segundos para aceptar
+local DUEL_TIMEOUT      = 120  -- segundos máximo de duelo
+
+local challengeEvent = RS:WaitForChild("ChallengeDuel")
+local responseEvent  = RS:WaitForChild("DuelResponse")
+local updateEvent    = RS:WaitForChild("DuelUpdate")
+
+-- ── Helpers ──────────────────────────────────────────────────────────────────
+
+local function broadcast(msg)
+	local m = Instance.new("Message")
+	m.Text = msg
+	m.Parent = workspace
+	task.delay(8, function() if m and m.Parent then m:Destroy() end end)
+end
+
+local function notify(player, msg, duelData)
+	updateEvent:FireClient(player, msg, duelData)
+end
+
+local function isInDuel(player)
+	return duels[player] ~= nil
+end
+
+local function cleanDuel(p1, p2)
+	-- Desconectar todas las conexiones
+	for _, p in ipairs({p1, p2}) do
+		if duels[p] and duels[p].conns then
+			for _, conn in ipairs(duels[p].conns) do
+				if conn and conn.Connected then conn:Disconnect() end
+			end
+		end
+		duels[p] = nil
+	end
+end
+
+local function teleportToArena(p1, p2)
+	local arena = workspace:FindFirstChild("ArenaDelVeredicto")
+	if not arena then return false end
+	local s1 = arena:FindFirstChild("Spawn1")
+	local s2 = arena:FindFirstChild("Spawn2")
+	if not s1 or not s2 then return false end
+	if p1.Character then p1.Character:SetPrimaryPartCFrame(s1.CFrame + Vector3.new(0,3,0)) end
+	if p2.Character then p2.Character:SetPrimaryPartCFrame(s2.CFrame + Vector3.new(0,3,0)) end
+	return true
+end
+
+local function teleportToSanctuary(player)
+	local base = workspace:FindFirstChild("ElSantuario")
+	if base then
+		local spawn = base:FindFirstChild("Spawn")
+		if spawn and player.Character then
+			player.Character:SetPrimaryPartCFrame(spawn.CFrame + Vector3.new(0,3,0))
+		end
+	end
+end
+
+-- ── Resolución del duelo ─────────────────────────────────────────────────────
+
+local function resolveDuel(winner, loser, reason)
+	local duelData = duels[winner]
+	if not duelData then return end
+	local bet = duelData.bet or 0
+
+	local RelicsManager = require(script.Parent.Parent.Economy.RelicsManager)
+
+	-- Premio al ganador (ya se descontó la apuesta al iniciar)
+	if bet > 0 then
+		RelicsManager:giveRelic(winner, "CarneDeQu", bet * 2)
+	end
+
+	-- Drop de reliquias del perdedor al ganador
+	RelicsManager:onPlayerKilled(loser, winner)
+
+	-- Limpiar
+	cleanDuel(winner, loser)
+
+	-- Mensajes
+	local reasonText = reason == "timeout" and " (tiempo agotado)" or ""
+	broadcast(string.format(
+		"⚔️ [%s] VENCIÓ A [%s] EN EL VEREDICTO%s. APOSTÓ %d 🜁",
+		winner.Name, loser.Name, reasonText, bet
+	))
+
+	notify(winner, "victoria", { bet = bet * 2 })
+	notify(loser,  "derrota",  { bet = 0 })
+
+	-- Devolver al santuario tras 3s
+	task.delay(3, function()
+		teleportToSanctuary(winner)
+		teleportToSanctuary(loser)
+	end)
+
+	print(string.format("⚔️ Duelo resuelto: %s venció a %s | Apuesta: %d", winner.Name, loser.Name, bet))
+end
+
+-- ── Iniciar duelo activo ─────────────────────────────────────────────────────
+
+local function startDuel(p1, p2, bet)
+	duels[p1] = { state = "active", opponent = p2, bet = bet, conns = {} }
+	duels[p2] = { state = "active", opponent = p1, bet = bet, conns = {} }
+
+	-- Teleport a la arena
+	local inArena = teleportToArena(p1, p2)
+
+	broadcast(string.format(
+		"⚔️ DUELO SAGRADO: [%s] VS [%s] | APUESTA: %d 🜁",
+		p1.Name, p2.Name, bet
+	))
+
+	notify(p1, "inicio", { opponent = p2.Name, bet = bet })
+	notify(p2, "inicio", { opponent = p1.Name, bet = bet })
+
+	-- Conectar muertes SOLO durante el duelo
+	local function onDied(dead)
+		local duel = duels[dead]
+		if not duel or duel.state ~= "active" then return end
+		local alive = duel.opponent
+		resolveDuel(alive, dead, "kill")
+	end
+
+	local function connectDeath(player)
+		if not player.Character then return end
+		local hum = player.Character:FindFirstChildOfClass("Humanoid")
+		if not hum then return end
+		local conn = hum.Died:Connect(function() onDied(player) end)
+		table.insert(duels[player] and duels[player].conns or {}, conn)
+	end
+
+	connectDeath(p1)
+	connectDeath(p2)
+
+	-- También conectar CharacterAdded por si muere y reaparece
+	local c1 = p1.CharacterAdded:Connect(function(char)
+		local hum = char:WaitForChild("Humanoid")
+		local conn = hum.Died:Connect(function() onDied(p1) end)
+		if duels[p1] then table.insert(duels[p1].conns, conn) end
+	end)
+	local c2 = p2.CharacterAdded:Connect(function(char)
+		local hum = char:WaitForChild("Humanoid")
+		local conn = hum.Died:Connect(function() onDied(p2) end)
+		if duels[p2] then table.insert(duels[p2].conns, conn) end
+	end)
+	if duels[p1] then table.insert(duels[p1].conns, c1) end
+	if duels[p2] then table.insert(duels[p2].conns, c2) end
+
+	-- Timeout del duelo
+	task.delay(DUEL_TIMEOUT, function()
+		if not duels[p1] or duels[p1].state ~= "active" then return end
+		-- Resolver por salud — quien tenga más HP gana
+		local hp1 = p1.Character and p1.Character:FindFirstChildOfClass("Humanoid") and p1.Character:FindFirstChildOfClass("Humanoid").Health or 0
+		local hp2 = p2.Character and p2.Character:FindFirstChildOfClass("Humanoid") and p2.Character:FindFirstChildOfClass("Humanoid").Health or 0
+		if hp1 >= hp2 then
+			resolveDuel(p1, p2, "timeout")
+		else
+			resolveDuel(p2, p1, "timeout")
+		end
+	end)
+end
+
+-- ── Challenge flow ────────────────────────────────────────────────────────────
+
+function DuelManager:challenge(challenger, target, bet)
+	bet = math.max(0, math.floor(bet or 0))
+
+	if isInDuel(challenger) then
+		notify(challenger, "error", { msg = "Ya estás en un duelo." })
+		return
+	end
+	if isInDuel(target) then
+		notify(challenger, "error", { msg = target.Name .. " ya está en un duelo." })
+		return
+	end
+
+	-- Verificar apuesta
+	local RelicsManager = require(script.Parent.Parent.Economy.RelicsManager)
+	if bet > 0 then
+		if RelicsManager:getRelicCount(challenger, "CarneDeQu") < bet then
+			notify(challenger, "error", { msg = "No tienes suficiente Carne de Qu." })
+			return
+		end
+		if RelicsManager:getRelicCount(target, "CarneDeQu") < bet then
+			notify(challenger, "error", { msg = target.Name .. " no tiene suficiente Carne de Qu." })
+			return
+		end
+	end
+
+	-- Marcar como pending
+	duels[challenger] = { state = "pending", opponent = target, bet = bet, conns = {} }
+
+	-- Notificar al retado
+	notify(target, "desafio", { challenger = challenger.Name, bet = bet })
+	notify(challenger, "esperando", { opponent = target.Name, bet = bet })
+
+	-- Timeout de aceptación
+	task.delay(CHALLENGE_TIMEOUT, function()
+		if duels[challenger] and duels[challenger].state == "pending" then
+			cleanDuel(challenger, target)
+			notify(challenger, "timeout_challenge", {})
+			notify(target,     "timeout_challenge", {})
+		end
+	end)
+end
+
+-- ── Init ──────────────────────────────────────────────────────────────────────
+
+function DuelManager:init()
+	-- Challenger envía desafío
+	challengeEvent.OnServerEvent:Connect(function(player, targetName, bet)
+		local target = Players:FindFirstChild(targetName)
+		if target and target ~= player then
+			self:challenge(player, target, tonumber(bet) or 0)
+		end
+	end)
+
+	-- Target responde
+	responseEvent.OnServerEvent:Connect(function(player, accepted)
+		local duelData = duels[player]
+		if not duelData or duelData.state ~= "pending" then return end
+
+		local challenger = duelData.opponent
+		if not challenger or not challenger.Parent then
+			cleanDuel(player, challenger)
+			return
+		end
+
+		-- El que recibe la respuesta es el target
+		-- Verificar que challenger sigue pendiente
+		if not duels[challenger] or duels[challenger].state ~= "pending" then return end
+
+		if accepted then
+			local bet = duelData.bet
+			local RelicsManager = require(script.Parent.Parent.Economy.RelicsManager)
+			-- Descontar apuesta a ambos
+			if bet > 0 then
+				RelicsManager:takeRelic(challenger, "CarneDeQu", bet)
+				RelicsManager:takeRelic(player, "CarneDeQu", bet)
+			end
+			startDuel(challenger, player, bet)
+		else
+			cleanDuel(challenger, player)
+			notify(challenger, "rechazado", { opponent = player.Name })
+			notify(player,     "rechazado", {})
+		end
+	end)
+
+	-- Limpiar duelos si el jugador sale
+	Players.PlayerRemoving:Connect(function(player)
+		local duelData = duels[player]
+		if duelData then
+			local opponent = duelData.opponent
+			if opponent and opponent.Parent then
+				-- Devolver apuesta al oponente si estaba activo
+				if duelData.state == "active" and duelData.bet > 0 then
+					local RelicsManager = require(script.Parent.Parent.Economy.RelicsManager)
+					RelicsManager:giveRelic(opponent, "CarneDeQu", duelData.bet)
+				end
+				resolveDuel(opponent, player, "disconnect")
+				notify(opponent, "oponente_desconecto", {})
+			end
+			cleanDuel(player, duelData.opponent)
+		end
+	end)
+
+	print("✅ DuelManager iniciado")
+end
+
+-- ── API pública ───────────────────────────────────────────────────────────────
+
+function DuelManager:isInDuel(player)
+	return isInDuel(player)
+end
+
+function DuelManager:getActiveDuels()
+	local count = 0
+	for _ in pairs(duels) do count += 1 end
+	return count / 2
+end
+
+return DuelManager
