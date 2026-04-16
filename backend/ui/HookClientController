@@ -1,0 +1,158 @@
+--!strict
+-- ============================================================================
+--  CLIENTE: LocalScript HookVisual_2026 (StarterPlayerScripts)
+--  DESCRIPCIÓN: Sistema visual del gancho usando PowerChainVFX.
+--  Cumple protocolo: MeshPart, partículas en ráfaga, iluminación sinusoidal,
+--  alineación a normal y limpieza automática.
+-- ============================================================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+local mouse = player:GetMouse()
+
+-- Cargar el módulo VFX
+local PowerChainVFX = require(ReplicatedStorage:WaitForChild("PowerChainVFX"))
+local VFX = PowerChainVFX.VFX
+
+-- Eventos
+local hookEvent = ReplicatedStorage:WaitForChild("HookEvent")
+
+-- Estado
+local hookActive = false
+local aimMeshes = {}           -- MeshParts de la cadena de apuntado
+local flickerLight: PointLight?
+local updateConnection: RBXScriptConnection?
+
+-- ========================== LIMPIEZA DE APUNTADO ==========================
+local function cleanupAim()
+	-- Destruir meshes
+	for _, mesh in ipairs(aimMeshes) do
+		mesh:Destroy()
+	end
+	aimMeshes = {}
+
+	-- Apagar luz
+	if flickerLight then
+		flickerLight:Destroy()
+		flickerLight = nil
+	end
+
+	-- Desconectar actualización
+	if updateConnection then
+		updateConnection:Disconnect()
+		updateConnection = nil
+	end
+end
+
+-- ========================== CREACIÓN DE CADENA DE APUNTADO (Vista previa) ==========================
+local function createAimChain(startPos: Vector3, endPos: Vector3)
+	cleanupAim()
+
+	local dir = endPos - startPos
+	local length = dir.Magnitude
+	if length < 0.1 then return end
+
+	local unit = dir.Unit
+	local perpX = (math.abs(unit.Y) < 0.99) and unit:Cross(Vector3.new(0,1,0)).Unit or unit:Cross(Vector3.new(1,0,0)).Unit
+	local perpZ = unit:Cross(perpX).Unit
+
+	local segments = math.floor(length * 1.5) + 6
+	local turns = 1.5
+	local radius = 0.8
+
+	for i = 0, segments do
+		local t = i / segments
+		local angle = t * math.pi * 2 * turns
+		local offset = perpX * math.cos(angle) * radius + perpZ * math.sin(angle) * radius
+		local pos = startPos + unit * (t * length) + offset
+
+		local mesh = VFX.Utilities.MeshFactory.createEnergyMesh(
+			"Cylinder",
+			Vector3.new(0.2, 0.2, 0.2),
+			Color3.fromRGB(255, 120, 120),
+			CFrame.new(pos),
+			Workspace
+		)
+		table.insert(aimMeshes, mesh)
+	end
+
+	-- Luz de apuntado
+	flickerLight = VFX.Utilities.LightingEffects.createFlickerLight(
+		startPos,
+		Color3.fromRGB(255, 80, 80),
+		8,
+		Workspace
+	)
+end
+
+-- ========================== ACTUALIZACIÓN CONTINUA ==========================
+local function onRenderStep()
+	if not hookActive then return end
+
+	local unitRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = {player.Character}
+
+	local result = Workspace:Raycast(unitRay.Origin, unitRay.Direction * 500, rayParams)
+	local hitPoint = result and result.Position or (unitRay.Origin + unitRay.Direction * 500)
+
+	-- Recrear la cadena de apuntado en cada frame (optimización: solo si cambió mucho)
+	createAimChain(unitRay.Origin, hitPoint)
+end
+
+-- ========================== MANEJO DE EVENTOS ==========================
+hookEvent.OnClientEvent:Connect(function(action: string, ...)
+	if action == "activar" then
+		hookActive = true
+		updateConnection = RunService.RenderStepped:Connect(onRenderStep)
+		mouse.Icon = "rbxasset://textures/ui/MouseIcon.png" -- Cambiar a ícono de gancho
+	elseif action == "desactivar" then
+		hookActive = false
+		cleanupAim()
+		mouse.Icon = "rbxasset://textures/ui/MouseIcon.png"
+	end
+end)
+
+mouse.Button1Down:Connect(function()
+	if not hookActive then return end
+
+	local unitRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = {player.Character}
+
+	local result = Workspace:Raycast(unitRay.Origin, unitRay.Direction * 500, rayParams)
+
+	if result and result.Instance then
+		local hitPart = result.Instance
+		local hitChar = hitPart:FindFirstAncestorOfClass("Model")
+		local targetPlayer = hitChar and Players:GetPlayerFromCharacter(hitChar)
+
+		if targetPlayer then
+			-- Obtener normal para alineación
+			local hitNormal = result.Normal
+
+			-- Enviar al servidor
+			hookEvent:FireServer("impacto", result.Position, targetPlayer)
+
+			-- Reproducir VFX de impacto inmediato (previsualización local)
+			VFX.playChainImpact(player, result.Position, hitNormal)
+
+			-- Desactivar modo apuntado
+			hookActive = false
+			cleanupAim()
+			mouse.Icon = "rbxasset://textures/ui/MouseIcon.png"
+		end
+	end
+end)
+
+-- Limpieza final al salir
+player.CharacterRemoving:Connect(function()
+	cleanupAim()
+end)
