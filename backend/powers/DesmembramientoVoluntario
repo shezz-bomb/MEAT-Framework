@@ -1,0 +1,335 @@
+--!strict
+-- ============================================================================
+--  MÓDULO: DesmembramientoVoluntario_VFX2026.lua
+--  DESCRIPCIÓN: Lanza un brazo como proyectil con efectos visuales de nivel 2026:
+--  MeshParts procedurales, partículas en ráfaga, luces con flicker sinusoidal,
+--  curvas Bezier, alineación a normales y limpieza automática.
+-- ============================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+local Workspace = game:GetService("Workspace")
+
+local DamageEvent = ReplicatedStorage:FindFirstChild("DamageEvent")
+local PowerVFX = ReplicatedStorage:FindFirstChild("PowerVFXEvent")
+
+-- ============================ CONSTANTES DE JUEGO ============================
+local PROJECTILE_SPEED = 90
+local PROJECTILE_RANGE = 20
+local DAMAGE_AMOUNT = 35
+
+local SOUND_TEAR = "rbxassetid://9121957000"
+local SOUND_IMPACT = "rbxassetid://9121958000"
+
+-- ============================ CONSTANTES VFX 2026 ============================
+local LIGHT_FLICKER_FREQ = 11
+local PARTICLE_BURST_COUNT = 36
+local MESH_ALPHA_MASK_ID = "rbxassetid://128576183"
+local FORCEFIELD_MATERIAL = Enum.Material.ForceField
+local NEON_MATERIAL = Enum.Material.Neon
+local BLOOD_COLOR = Color3.fromRGB(180, 20, 20)
+
+-- ============================ UTILIDADES VFX ============================
+local VFXUtils = {}
+
+function VFXUtils.createEnergyMesh(shape: string, size: Vector3, color: Color3, cframe: CFrame, parent: Instance?): MeshPart
+	local mesh = Instance.new("MeshPart")
+	mesh.Size = size
+	mesh.Color = color
+	mesh.Material = FORCEFIELD_MATERIAL
+	mesh.Anchored = true
+	mesh.CanCollide = false
+	mesh.CFrame = cframe
+	mesh.Transparency = 0.3
+
+	local meshId = "rbxassetid://" .. (shape == "Cylinder" and "1033714" or "1033710")
+	local specialMesh = Instance.new("SpecialMesh")
+	specialMesh.MeshId = meshId
+	specialMesh.Scale = Vector3.new(1,1,1)
+	specialMesh.Parent = mesh
+
+	local surfaceGui = Instance.new("SurfaceGui")
+	surfaceGui.Face = Enum.NormalId.Front
+	surfaceGui.AlwaysOnTop = true
+	surfaceGui.Brightness = 0
+	surfaceGui.Transparency = 0
+	surfaceGui.ClipsDescendants = false
+	surfaceGui.Parent = mesh
+
+	local imageLabel = Instance.new("ImageLabel")
+	imageLabel.Size = UDim2.new(1,0,1,0)
+	imageLabel.BackgroundTransparency = 1
+	imageLabel.Image = MESH_ALPHA_MASK_ID
+	imageLabel.ImageTransparency = 0.5
+	imageLabel.ScaleType = Enum.ScaleType.Stretch
+	imageLabel.Parent = surfaceGui
+
+	mesh.Parent = parent or Workspace
+	return mesh
+end
+
+function VFXUtils.configureEmitter(emitter: ParticleEmitter, baseColor: Color3)
+	local sizeSeq = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0.15, 0.5),
+		NumberSequenceKeypoint.new(0.25, 1.0, -0.3),
+		NumberSequenceKeypoint.new(0.6, 0.7, -0.9),
+		NumberSequenceKeypoint.new(1, 0, -0.2)
+	}
+	emitter.Size = sizeSeq
+
+	local transSeq = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0, 0.3),
+		NumberSequenceKeypoint.new(0.35, 0.2, 0.2),
+		NumberSequenceKeypoint.new(0.7, 0.6, 0.4),
+		NumberSequenceKeypoint.new(1, 1, 0.2)
+	}
+	emitter.Transparency = transSeq
+
+	emitter.Color = ColorSequence.new(baseColor)
+	emitter.Rate = 0
+	emitter.Lifetime = NumberRange.new(0.5, 0.9)
+	emitter.Speed = NumberRange.new(3, 8)
+	emitter.SpreadAngle = Vector2.new(15, 40)
+	emitter.RotSpeed = NumberRange.new(-180, 180)
+	emitter.Acceleration = Vector3.new(0, 2, 0)
+	emitter.Drag = 1.2
+	emitter.LockedToPart = false
+	emitter.Enabled = true
+	emitter.VelocityInheritance = 0.2
+end
+
+function VFXUtils.emitBurst(position: Vector3, count: number, color: Color3, parent: Instance?)
+	local attachment = Instance.new("Attachment")
+	attachment.WorldPosition = position
+	attachment.Parent = parent or Workspace.Terrain
+
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Parent = attachment
+	VFXUtils.configureEmitter(emitter, color)
+
+	emitter:Emit(count)
+
+	task.delay(emitter.Lifetime.Max + 0.5, function()
+		attachment:Destroy()
+	end)
+end
+
+function VFXUtils.createFlickerLight(position: Vector3, baseColor: Color3, range: number, parent: Instance?, duration: number?)
+	local light = Instance.new("PointLight")
+	light.Position = position
+	light.Color = baseColor:Lerp(Color3.new(1,1,1), 0.2)
+	light.Range = range
+	light.Brightness = 4
+	light.Shadows = false
+	light.Parent = parent or Workspace
+
+	local connection
+	local startTime = os.clock()
+	connection = RunService.Heartbeat:Connect(function()
+		if not light.Parent then
+			connection:Disconnect()
+			return
+		end
+		local t = os.clock() - startTime
+		local flicker = 0.6 + 0.5 * math.sin(t * LIGHT_FLICKER_FREQ)
+		light.Brightness = math.clamp(4 * flicker, 1, 6)
+	end)
+
+	local cleanupDelay = duration or 1.0
+	task.delay(cleanupDelay, function()
+		if connection then connection:Disconnect() end
+		if light.Parent then light:Destroy() end
+	end)
+
+	return light
+end
+
+function VFXUtils.scaleAndFade(obj: BasePart, targetScale: Vector3, duration: number, callback: (() -> ())?)
+	local originalSize = obj.Size
+	local originalTransparency = obj.Transparency
+
+	local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	local tween = TweenService:Create(obj, tweenInfo, {
+		Size = targetScale,
+		Transparency = 1 - (originalSize.Magnitude / targetScale.Magnitude) * (1 - originalTransparency)
+	})
+
+	tween:Play()
+	if callback then
+		tween.Completed:Connect(callback)
+	end
+	return tween
+end
+
+-- ============================ PROYECTIL (BRAZO) ============================
+local function createArmProjectile(startPos: Vector3, direction: Vector3, speed: number, range: number): (BasePart, Attachment, ParticleEmitter)
+	local arm = Instance.new("Part")
+	arm.Size = Vector3.new(0.8, 0.8, 2.2)
+	arm.CFrame = CFrame.lookAt(startPos, startPos + direction)
+	arm.Color = BLOOD_COLOR
+	arm.Material = Enum.Material.SmoothPlastic
+	arm.CanCollide = false
+	arm.Anchored = false
+	arm.Parent = Workspace
+
+	local attachment = Instance.new("Attachment")
+	attachment.Parent = arm
+
+	local trailEmitter = Instance.new("ParticleEmitter")
+	trailEmitter.Parent = attachment
+	VFXUtils.configureEmitter(trailEmitter, BLOOD_COLOR)
+	trailEmitter.Speed = NumberRange.new(0, 1)
+	trailEmitter.Acceleration = Vector3.new(0, 0, 0)
+	trailEmitter.SpreadAngle = Vector2.new(0, 0)
+	trailEmitter.Rate = 300
+	trailEmitter.Lifetime = NumberRange.new(0.3, 0.6)
+	trailEmitter.Enabled = true
+
+	arm.AssemblyLinearVelocity = direction * speed
+
+	local travelTime = range / speed
+	Debris:AddItem(arm, travelTime + 0.5)
+
+	return arm, attachment, trailEmitter
+end
+
+-- ============================ EFECTOS DE IMPACTO ============================
+local function createImpactEffects(position: Vector3, normal: Vector3?)
+	local alignedCFrame = normal and CFrame.fromMatrix(position,
+		(math.abs(normal.Y) < 0.99) and Vector3.new(0,1,0):Cross(normal).Unit or Vector3.new(1,0,0),
+		normal
+	) or CFrame.new(position)
+
+	local shockwave = VFXUtils.createEnergyMesh(
+		"Cylinder",
+		Vector3.new(0.5, 0.1, 0.5),
+		BLOOD_COLOR,
+		alignedCFrame,
+		Workspace
+	)
+	shockwave.Material = NEON_MATERIAL
+	VFXUtils.scaleAndFade(shockwave, Vector3.new(5, 0.1, 5), 0.35, function()
+		shockwave:Destroy()
+	end)
+
+	VFXUtils.emitBurst(position + Vector3.new(0,1,0), PARTICLE_BURST_COUNT, BLOOD_COLOR, Workspace)
+	VFXUtils.createFlickerLight(position, BLOOD_COLOR, 8, Workspace, 1.0)
+end
+
+local function shakeCamera(duration: number, intensity: number)
+	local camera = Workspace.CurrentCamera
+	if not camera then return end
+	local originalCF = camera.CFrame
+	local start = tick()
+	local conn
+	conn = RunService.RenderStepped:Connect(function()
+		if tick() - start >= duration then
+			conn:Disconnect()
+			camera.CFrame = originalCF
+			return
+		end
+		local offset = Vector3.new(
+			(math.random() - 0.5) * intensity,
+			(math.random() - 0.5) * intensity,
+			0
+		)
+		camera.CFrame = originalCF * CFrame.new(offset)
+	end)
+end
+
+-- ============================ MÓDULO PRINCIPAL ============================
+return {
+	name = "✂️ DESMEMBRAMIENTO VOLUNTARIO (VFX 2026)",
+	description = "Lanzas un brazo como proyectil. 35 de daño al primer enemigo en radio 20, delante tuyo.",
+	icon = "rbxassetid://123456789",
+	cooldown = 16,
+
+	onUse = function(player: Player)
+		local character = player.Character
+		if not character then return end
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+
+		local direction = root.CFrame.LookVector
+		local startPos = root.Position + direction * 2
+
+		-- Sonido de desgarro
+		local soundPart = Instance.new("Part")
+		soundPart.Anchored = true
+		soundPart.CanCollide = false
+		soundPart.Transparency = 1
+		soundPart.Size = Vector3.new(1,1,1)
+		soundPart.Position = root.Position
+		soundPart.Parent = Workspace
+		local sound = Instance.new("Sound", soundPart)
+		sound.SoundId = SOUND_TEAR
+		sound.Volume = 0.9
+		sound:Play()
+		Debris:AddItem(soundPart, sound.TimeLength + 0.5)
+
+		-- Ráfaga de partículas en el lanzamiento
+		VFXUtils.emitBurst(startPos, 15, BLOOD_COLOR, Workspace)
+
+		-- Crear proyectil
+		local arm, attachment, trailEmitter = createArmProjectile(startPos, direction, PROJECTILE_SPEED, PROJECTILE_RANGE)
+
+		local hit = false
+		arm.Touched:Connect(function(part)
+			if hit then return end
+
+			local victimPlayer = Players:GetPlayerFromCharacter(part.Parent)
+			if victimPlayer and victimPlayer ~= player then
+				local humanoid = part.Parent:FindFirstChild("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					local currentDist = (arm.Position - root.Position).Magnitude
+					if currentDist <= PROJECTILE_RANGE then
+						hit = true
+
+						local hitPos = arm.Position
+						local hitNormal = nil
+						local rayResult = Workspace:Raycast(arm.Position, -direction * 2)
+						if rayResult then
+							hitNormal = rayResult.Normal
+						end
+
+						-- Efectos de impacto
+						createImpactEffects(hitPos, hitNormal)
+						shakeCamera(0.25, 3)
+
+						-- Sonido de impacto
+						local impactSoundPart = Instance.new("Part")
+						impactSoundPart.Anchored = true
+						impactSoundPart.CanCollide = false
+						impactSoundPart.Transparency = 1
+						impactSoundPart.Size = Vector3.new(1,1,1)
+						impactSoundPart.Position = hitPos
+						impactSoundPart.Parent = Workspace
+						local impactSound = Instance.new("Sound", impactSoundPart)
+						impactSound.SoundId = SOUND_IMPACT
+						impactSound.Volume = 1
+						impactSound.PlaybackSpeed = 1.1
+						impactSound:Play()
+						Debris:AddItem(impactSoundPart, impactSound.TimeLength + 0.5)
+
+						-- Daño
+						if humanoid and humanoid.Health > 0 then
+							humanoid:TakeDamage(DAMAGE_AMOUNT)
+						end
+						if DamageEvent then
+							DamageEvent:FireClient(victimPlayer, {action = "hit", amount = DAMAGE_AMOUNT})
+						end
+
+						arm:Destroy()
+					end
+				end
+			end
+		end)
+
+		if PowerVFX then
+			PowerVFX:FireClient(player, "DesmembramientoVoluntario", root.Position)
+		end
+	end
+}
