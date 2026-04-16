@@ -1,0 +1,459 @@
+--!strict
+-- ============================================================================
+--  MÓDULO: TransformacionVacaHumana_VFX2026.lua
+--  DESCRIPCIÓN: Transformación en híbrido vaca-humano con efectos visuales de
+--  nivel 2026: MeshParts procedurales, partículas en ráfaga, luces con flicker
+--  sinusoidal, curvas Bezier y limpieza automática sin fugas de memoria.
+--  ARQUITECTURA: Self-contained, leak-proof, optimizado para hardware medio.
+-- ============================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local Debris = game:GetService("Debris")
+local Workspace = game:GetService("Workspace")
+
+local PowerVFX = ReplicatedStorage:FindFirstChild("PowerVFXEvent")
+
+-- ============================ CONSTANTES DE JUEGO ============================
+local BUFF_DURATION = 8
+local MAX_HEALTH_BONUS = 50
+local DAMAGE_BUFF = 1.3
+
+-- IDs de sonidos (reemplazar por los definitivos)
+local SOUND_TRANSFORM = "rbxassetid://9121952000"
+local SOUND_RAGE = "rbxassetid://9121953000"
+local SOUND_REVERT = "rbxassetid://9121954000"
+
+-- ============================ CONSTANTES VFX 2026 ============================
+local LIGHT_FLICKER_FREQ = 10
+local PARTICLE_BURST_COUNT = 28
+local MESH_ALPHA_MASK_ID = "rbxassetid://128576183" -- Textura de degradado circular
+local FORCEFIELD_MATERIAL = Enum.Material.ForceField
+local NEON_MATERIAL = Enum.Material.Neon
+
+-- ============================ UTILIDADES DE CREACIÓN VFX ============================
+local VFXUtils = {}
+
+-- MeshPart con alpha mask (protocolo Mesh-Centric)
+function VFXUtils.createEnergyMesh(shape: string, size: Vector3, color: Color3, cframe: CFrame, parent: Instance?): MeshPart
+	local mesh = Instance.new("MeshPart")
+	mesh.Size = size
+	mesh.Color = color
+	mesh.Material = FORCEFIELD_MATERIAL
+	mesh.Anchored = true
+	mesh.CanCollide = false
+	mesh.CFrame = cframe
+	mesh.Transparency = 0.3
+
+	local meshId = "rbxassetid://" .. (shape == "Cylinder" and "1033714" or "1033710")
+	local specialMesh = Instance.new("SpecialMesh")
+	specialMesh.MeshId = meshId
+	specialMesh.Scale = Vector3.new(1,1,1)
+	specialMesh.Parent = mesh
+
+	local surfaceGui = Instance.new("SurfaceGui")
+	surfaceGui.Face = Enum.NormalId.Front
+	surfaceGui.AlwaysOnTop = true
+	surfaceGui.Brightness = 0
+	surfaceGui.Transparency = 0
+	surfaceGui.ClipsDescendants = false
+	surfaceGui.Parent = mesh
+
+	local imageLabel = Instance.new("ImageLabel")
+	imageLabel.Size = UDim2.new(1,0,1,0)
+	imageLabel.BackgroundTransparency = 1
+	imageLabel.Image = MESH_ALPHA_MASK_ID
+	imageLabel.ImageTransparency = 0.5
+	imageLabel.ScaleType = Enum.ScaleType.Stretch
+	imageLabel.Parent = surfaceGui
+
+	mesh.Parent = parent or Workspace
+	return mesh
+end
+
+-- Emisor de partículas configurado con curvas Bezier
+function VFXUtils.configureEmitter(emitter: ParticleEmitter, baseColor: Color3)
+	local sizeSeq = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0.2, 0.7),
+		NumberSequenceKeypoint.new(0.25, 1.3, -0.4),
+		NumberSequenceKeypoint.new(0.6, 0.8, -1.1),
+		NumberSequenceKeypoint.new(1, 0, -0.3)
+	}
+	emitter.Size = sizeSeq
+
+	local transSeq = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0, 0.4),
+		NumberSequenceKeypoint.new(0.35, 0.25, 0.25),
+		NumberSequenceKeypoint.new(0.75, 0.7, 0.5),
+		NumberSequenceKeypoint.new(1, 1, 0.2)
+	}
+	emitter.Transparency = transSeq
+
+	emitter.Color = ColorSequence.new(baseColor)
+	emitter.Rate = 0
+	emitter.Lifetime = NumberRange.new(0.8, 1.3)
+	emitter.Speed = NumberRange.new(5, 10)
+	emitter.SpreadAngle = Vector2.new(30, 60)
+	emitter.RotSpeed = NumberRange.new(-180, 180)
+	emitter.Acceleration = Vector3.new(0, 3, 0)
+	emitter.Drag = 1.8
+	emitter.LockedToPart = false
+	emitter.Enabled = true
+	emitter.VelocityInheritance = 0.1
+end
+
+-- Ráfaga de partículas (burst-driven)
+function VFXUtils.emitBurst(position: Vector3, count: number, color: Color3, parent: Instance?)
+	local attachment = Instance.new("Attachment")
+	attachment.WorldPosition = position
+	attachment.Parent = parent or Workspace.Terrain
+
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Parent = attachment
+	VFXUtils.configureEmitter(emitter, color)
+
+	emitter:Emit(count)
+
+	task.delay(emitter.Lifetime.Max + 0.5, function()
+		attachment:Destroy()
+	end)
+end
+
+-- Luz con flicker sinusoidal (iluminación volumétrica)
+function VFXUtils.createFlickerLight(position: Vector3, baseColor: Color3, range: number, parent: Instance?, duration: number?)
+	local light = Instance.new("PointLight")
+	light.Position = position
+	light.Color = baseColor:Lerp(Color3.new(1,1,1), 0.2) -- 20% más saturado
+	light.Range = range
+	light.Brightness = 5
+	light.Shadows = false
+	light.Parent = parent or Workspace
+
+	local connection
+	local startTime = os.clock()
+	connection = RunService.Heartbeat:Connect(function()
+		if not light.Parent then
+			connection:Disconnect()
+			return
+		end
+		local t = os.clock() - startTime
+		local flicker = 0.65 + 0.45 * math.sin(t * LIGHT_FLICKER_FREQ)
+		light.Brightness = math.clamp(5 * flicker, 1.5, 7)
+	end)
+
+	local cleanupDelay = duration or 2.0
+	task.delay(cleanupDelay, function()
+		if connection then connection:Disconnect() end
+		if light.Parent then light:Destroy() end
+	end)
+
+	return light
+end
+
+-- Interpolación kinética (escala y transparencia sincronizadas)
+function VFXUtils.scaleAndFade(obj: BasePart, targetScale: Vector3, duration: number, callback: (() -> ())?)
+	local originalSize = obj.Size
+	local originalTransparency = obj.Transparency
+
+	local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	local tween = TweenService:Create(obj, tweenInfo, {
+		Size = targetScale,
+		Transparency = 1 - (originalSize.Magnitude / targetScale.Magnitude) * (1 - originalTransparency)
+	})
+
+	tween:Play()
+	if callback then
+		tween.Completed:Connect(callback)
+	end
+	return tween
+end
+
+-- ============================ EFECTOS DE TRANSFORMACIÓN ============================
+local TransformationVFX = {}
+
+-- Aura de furia (MeshPart con pulsación)
+function TransformationVFX.createRageAura(character: Model, duration: number)
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	local auraMesh = VFXUtils.createEnergyMesh(
+		"Sphere",
+		Vector3.new(4.5, 4.5, 4.5),
+		Color3.fromRGB(200, 30, 30),
+		root.CFrame,
+		Workspace
+	)
+	auraMesh.Material = NEON_MATERIAL
+	auraMesh.Transparency = 0.5
+
+	-- Seguir al personaje
+	local connection
+	connection = RunService.Heartbeat:Connect(function()
+		if not character.Parent or not root.Parent then
+			connection:Disconnect()
+			auraMesh:Destroy()
+			return
+		end
+		auraMesh.CFrame = root.CFrame
+	end)
+
+	-- Pulso de escala (crecimiento y encogimiento)
+	local pulseUp = TweenService:Create(auraMesh, TweenInfo.new(0.6, Enum.EasingStyle.Sine), {Size = Vector3.new(5.2, 5.2, 5.2), Transparency = 0.4})
+	local pulseDown = TweenService:Create(auraMesh, TweenInfo.new(0.6, Enum.EasingStyle.Sine), {Size = Vector3.new(4.5, 4.5, 4.5), Transparency = 0.6})
+	pulseUp:Play()
+	pulseUp.Completed:Connect(function() pulseDown:Play() end)
+	pulseDown.Completed:Connect(function() pulseUp:Play() end)
+
+	-- Desaparición al final
+	task.delay(duration, function()
+		connection:Disconnect()
+		VFXUtils.scaleAndFade(auraMesh, Vector3.new(0,0,0), 0.4, function()
+			auraMesh:Destroy()
+		end)
+	end)
+end
+
+-- Tinte rojo en pantalla (ColorCorrection)
+function TransformationVFX.rageTint(duration: number)
+	local colorCorr = Instance.new("ColorCorrectionEffect")
+	colorCorr.TintColor = Color3.fromRGB(255, 40, 0)
+	colorCorr.Weight = 0.3
+	colorCorr.Parent = Lighting
+
+	task.delay(duration, function()
+		local fade = TweenService:Create(colorCorr, TweenInfo.new(0.3), {Weight = 0})
+		fade:Play()
+		fade.Completed:Connect(function() colorCorr:Destroy() end)
+	end)
+end
+
+-- Sacudida de cámara (sin cambios, pero con desconexión)
+function TransformationVFX.shakeCamera(duration: number, intensity: number)
+	local camera = Workspace.CurrentCamera
+	if not camera then return end
+	local originalCF = camera.CFrame
+	local start = tick()
+	local conn
+	conn = RunService.RenderStepped:Connect(function()
+		if tick() - start >= duration then
+			conn:Disconnect()
+			camera.CFrame = originalCF
+			return
+		end
+		local offset = Vector3.new(
+			(math.random() - 0.5) * intensity,
+			(math.random() - 0.5) * intensity,
+			0
+		)
+		camera.CFrame = originalCF * CFrame.new(offset)
+	end)
+end
+
+-- ============================ GESTIÓN DE APARIENCIA ============================
+local function storeOriginalAppearance(character: Model): { [BasePart]: {Size: Vector3, Color: Color3, Material: Enum.Material, Transparency: number} } | any
+	local data = {}
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			data[part] = {
+				Size = part.Size,
+				Color = part.Color,
+				Material = part.Material,
+				Transparency = part.Transparency
+			}
+		end
+	end
+	local hum = character:FindFirstChild("Humanoid")
+	if hum and hum.HumanoidDescription then
+		data.humanoidScale = hum.HumanoidDescription.BodyTypeScale
+	end
+	return data
+end
+
+local function applyCowTransformation(character: Model)
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			part.Size = part.Size * 1.1
+			if math.random() < 0.3 then
+				part.Color = Color3.fromRGB(80, 40, 20)
+			else
+				part.Color = Color3.fromRGB(180, 100, 60)
+			end
+			part.Material = Enum.Material.SmoothPlastic
+		end
+	end
+	local hum = character:FindFirstChild("Humanoid")
+	if hum and hum.HumanoidDescription then
+		hum.HumanoidDescription.BodyTypeScale = 1.15
+	end
+end
+
+local function restoreAppearance(character: Model, originalData)
+	for part, data in pairs(originalData) do
+		if part and part.Parent and type(data) == "table" and data.Size then
+			part.Size = data.Size
+			part.Color = data.Color
+			part.Material = data.Material
+			part.Transparency = data.Transparency
+		end
+	end
+	local hum = character:FindFirstChild("Humanoid")
+	if hum and hum.HumanoidDescription and originalData.humanoidScale then
+		hum.HumanoidDescription.BodyTypeScale = originalData.humanoidScale
+	end
+end
+
+-- ============================ MÓDULO PRINCIPAL ============================
+return {
+	name = "🐄 TRANSFORMACIÓN VACAHUMANA (VFX 2026)",
+	description = "Te transformas, ganando 50 de vida máxima y 30% más de daño cuerpo a cuerpo durante 8 segundos.",
+	icon = "rbxassetid://123456789",
+	cooldown = 35,
+
+	onUse = function(player: Player)
+		local character = player.Character
+		if not character then return end
+		local humanoid = character:FindFirstChild("Humanoid")
+		if not humanoid then return end
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+
+		-- Estado original
+		local originalMaxHealth = humanoid.MaxHealth
+		local originalAppearance = storeOriginalAppearance(character)
+
+		-- Aplicar buffs
+		humanoid.MaxHealth = originalMaxHealth + MAX_HEALTH_BONUS
+		humanoid.Health = humanoid.Health + MAX_HEALTH_BONUS
+		player:SetAttribute("DamageBuff", DAMAGE_BUFF)
+
+		-- Transformación visual del personaje
+		applyCowTransformation(character)
+
+		-- ========== EFECTOS VFX 2026 ==========
+
+		-- Sonido 3D de transformación
+		local soundPart = Instance.new("Part")
+		soundPart.Anchored = true
+		soundPart.CanCollide = false
+		soundPart.Transparency = 1
+		soundPart.Size = Vector3.new(1,1,1)
+		soundPart.Position = root.Position
+		soundPart.Parent = Workspace
+		local sound = Instance.new("Sound", soundPart)
+		sound.SoundId = SOUND_TRANSFORM
+		sound.Volume = 1
+		sound:Play()
+		Debris:AddItem(soundPart, sound.TimeLength + 0.5)
+
+		-- Sonido de rabia en bucle
+		local rageSoundPart = Instance.new("Part")
+		rageSoundPart.Anchored = true
+		rageSoundPart.CanCollide = false
+		rageSoundPart.Transparency = 1
+		rageSoundPart.Size = Vector3.new(1,1,1)
+		rageSoundPart.Position = root.Position
+		rageSoundPart.Parent = Workspace
+		local rageSound = Instance.new("Sound", rageSoundPart)
+		rageSound.SoundId = SOUND_RAGE
+		rageSound.Volume = 0.6
+		rageSound.Looped = true
+		rageSound:Play()
+
+		-- Seguir sonido al personaje
+		local soundFollowConn
+		soundFollowConn = RunService.Heartbeat:Connect(function()
+			if not root.Parent then
+				soundFollowConn:Disconnect()
+				rageSoundPart:Destroy()
+				return
+			end
+			rageSoundPart.Position = root.Position
+		end)
+
+		-- Sacudida de cámara
+		TransformationVFX.shakeCamera(0.35, 3)
+
+		-- Tinte rojo
+		TransformationVFX.rageTint(BUFF_DURATION)
+
+		-- Aura de furia (MeshPart con pulso)
+		TransformationVFX.createRageAura(character, BUFF_DURATION)
+
+		-- Ráfaga de partículas en activación
+		VFXUtils.emitBurst(root.Position + Vector3.new(0,2,0), PARTICLE_BURST_COUNT, Color3.fromRGB(200, 20, 20), Workspace)
+
+		-- Luz con flicker en el personaje (dura todo el buff)
+		local rageLight = VFXUtils.createFlickerLight(root.Position, Color3.fromRGB(255, 40, 40), 10, Workspace, BUFF_DURATION)
+		local lightFollowConn
+		lightFollowConn = RunService.Heartbeat:Connect(function()
+			if not root.Parent then
+				lightFollowConn:Disconnect()
+				return
+			end
+			rageLight.Position = root.Position
+		end)
+
+		-- Flash inicial (onda de choque)
+		local flashMesh = VFXUtils.createEnergyMesh(
+			"Sphere",
+			Vector3.new(2,2,2),
+			Color3.fromRGB(255, 50, 50),
+			root.CFrame,
+			Workspace
+		)
+		flashMesh.Material = NEON_MATERIAL
+		VFXUtils.scaleAndFade(flashMesh, Vector3.new(8,8,8), 0.25, function()
+			flashMesh:Destroy()
+		end)
+
+		-- ========== FINALIZACIÓN PROGRAMADA ==========
+		task.delay(BUFF_DURATION, function()
+			-- Remover buffs
+			if player and player.Parent then
+				player:SetAttribute("DamageBuff", nil)
+			end
+			if humanoid and humanoid.Parent then
+				humanoid.MaxHealth = originalMaxHealth
+				if humanoid.Health > humanoid.MaxHealth then
+					humanoid.Health = humanoid.MaxHealth
+				end
+			end
+
+			-- Restaurar apariencia
+			restoreAppearance(character, originalAppearance)
+
+			-- Detener sonido de rabia
+			if rageSound then rageSound:Stop() end
+			if soundFollowConn then soundFollowConn:Disconnect() end
+			if rageSoundPart then rageSoundPart:Destroy() end
+
+			-- Sonido de revertir
+			local revertSoundPart = Instance.new("Part")
+			revertSoundPart.Anchored = true
+			revertSoundPart.CanCollide = false
+			revertSoundPart.Transparency = 1
+			revertSoundPart.Size = Vector3.new(1,1,1)
+			revertSoundPart.Position = root.Position
+			revertSoundPart.Parent = Workspace
+			local revertSound = Instance.new("Sound", revertSoundPart)
+			revertSound.SoundId = SOUND_REVERT
+			revertSound.Volume = 0.7
+			revertSound:Play()
+			Debris:AddItem(revertSoundPart, revertSound.TimeLength + 0.5)
+
+			-- Ráfaga de partículas al terminar
+			VFXUtils.emitBurst(root.Position + Vector3.new(0,2,0), 20, Color3.fromRGB(100, 100, 100), Workspace)
+
+			-- Luz de cierre
+			local endLight = VFXUtils.createFlickerLight(root.Position, Color3.fromRGB(150, 150, 150), 8, Workspace, 1.5)
+		end)
+
+		-- Señal remota (opcional)
+		if PowerVFX then
+			PowerVFX:FireClient(player, "TransformacionVacaHumana", root.Position)
+		end
+	end
+}
