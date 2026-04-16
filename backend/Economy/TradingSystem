@@ -1,0 +1,122 @@
+-- Core/Economy/TradingSystem
+local TradingSystem = {}
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RelicsManager = require(script.Parent.RelicsManager)
+
+local activeTrades = {}
+
+function TradingSystem:init()
+	local event = Instance.new("RemoteEvent")
+	event.Name = "TradeEvent"
+	event.Parent = ReplicatedStorage
+	event.OnServerEvent:Connect(function(player, action, ...)
+		if action == "request" then self:requestTrade(player, ...)
+		elseif action == "accept" then self:acceptTrade(player)
+		elseif action == "decline" then self:declineTrade(player)
+		elseif action == "updateOffer" then self:updateOffer(player, ...)
+		elseif action == "confirm" then self:confirmTrade(player) end
+	end)
+end
+
+function TradingSystem:requestTrade(from, targetName)
+	local target = Players:FindFirstChild(targetName)
+	if not target or target == from then self:sendMessage(from, "error", "Jugador no válido") return end
+	if activeTrades[from] or activeTrades[target] then self:sendMessage(from, "error", "Ya en trade") return end
+	local trade = { partner = target, offers = { [from] = {}, [target] = {} }, confirmed = { [from] = false, [target] = false }, state = "pending" }
+	activeTrades[from] = trade
+	activeTrades[target] = trade
+	self:sendMessage(from, "trade_request_sent", target.Name)
+	self:sendMessage(target, "trade_request_received", from.Name)
+end
+
+function TradingSystem:acceptTrade(player)
+	local trade = activeTrades[player]
+	if not trade or trade.state ~= "pending" then return end
+	trade.state = "active"
+	self:sendMessage(player, "trade_accepted", trade.partner.Name)
+	self:sendMessage(trade.partner, "trade_accepted", player.Name)
+end
+
+function TradingSystem:declineTrade(player)
+	local trade = activeTrades[player]
+	if not trade then return end
+	local partner = trade.partner
+	activeTrades[player] = nil
+	activeTrades[partner] = nil
+	self:sendMessage(player, "trade_declined", "Has rechazado")
+	self:sendMessage(partner, "trade_declined", "El otro rechazó")
+end
+
+function TradingSystem:updateOffer(player, offer)
+	local trade = activeTrades[player]
+	if not trade or trade.state ~= "active" then return end
+	local valid = {}
+	for relic, amount in pairs(offer) do
+		if RelicsManager:getRelicCount(player, relic) >= amount then valid[relic] = amount end
+	end
+	trade.offers[player] = valid
+	trade.confirmed[player] = false
+	trade.confirmed[trade.partner] = false
+	self:sendMessage(player, "offer_updated", valid)
+	self:sendMessage(trade.partner, "partner_offer_updated", valid)
+end
+
+function TradingSystem:confirmTrade(player)
+	local trade = activeTrades[player]
+	if not trade or trade.state ~= "active" then return end
+	trade.confirmed[player] = true
+	self:sendMessage(player, "confirmed", true)
+	self:sendMessage(trade.partner, "partner_confirmed", true)
+	if trade.confirmed[player] and trade.confirmed[trade.partner] then
+		self:executeTrade(trade)
+	end
+end
+
+function TradingSystem:executeTrade(trade)
+	if trade.executing then return end  -- guard contra doble ejecucion
+	trade.executing = true
+	local p1, p2 = nil, nil
+	for k, v in pairs(activeTrades) do
+		if v == trade then
+			if not p1 then p1 = k else p2 = k end
+		end
+	end
+	if not p1 or not p2 then return end
+
+	local offers = trade.offers
+	for relic, amount in pairs(offers[p1] or {}) do
+		if RelicsManager:getRelicCount(p1, relic) < amount then self:cancelTrade(p1, p2) return end
+	end
+	for relic, amount in pairs(offers[p2] or {}) do
+		if RelicsManager:getRelicCount(p2, relic) < amount then self:cancelTrade(p1, p2) return end
+	end
+
+	for relic, amount in pairs(offers[p1] or {}) do
+		RelicsManager:takeRelic(p1, relic, amount)
+		RelicsManager:giveRelic(p2, relic, amount)
+	end
+	for relic, amount in pairs(offers[p2] or {}) do
+		RelicsManager:takeRelic(p2, relic, amount)
+		RelicsManager:giveRelic(p1, relic, amount)
+	end
+
+	self:sendMessage(p1, "trade_success", "Intercambio completado")
+	self:sendMessage(p2, "trade_success", "Intercambio completado")
+	activeTrades[p1] = nil
+	activeTrades[p2] = nil
+end
+
+function TradingSystem:cancelTrade(p1, p2)
+	self:sendMessage(p1, "trade_failed", "Los ítems ya no están disponibles")
+	self:sendMessage(p2, "trade_failed", "Los ítems ya no están disponibles")
+	activeTrades[p1] = nil
+	activeTrades[p2] = nil
+end
+
+function TradingSystem:sendMessage(player, msgType, data)
+	local event = ReplicatedStorage:FindFirstChild("TradeMessage")
+	if event then event:FireClient(player, msgType, data) end
+end
+
+return TradingSystem
