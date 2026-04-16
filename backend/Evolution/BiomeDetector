@@ -1,0 +1,142 @@
+-- BiomeDetector — MEAT Project
+local BiomeDetector = {}
+local Players = game:GetService("Players")
+local MutationController = nil
+
+local MUTATION_THRESHOLD = 60
+local CHECK_INTERVAL = 5
+
+local BIOME_MAP = {
+	Bioma_Pantano  = "Pterosapiens",
+	Bioma_Desierto = "Temerario",
+	Bioma_Fabrica  = "ToolBreeder",
+	Bioma_Colmena  = "Colonial",
+	Bioma_Vacio    = "StarPerson",
+}
+
+local biomeZones = {}
+
+local function loadZones()
+	biomeZones = {}
+	for biomeName, species in pairs(BIOME_MAP) do
+		local part = workspace:FindFirstChild(biomeName)
+		if part and part:IsA("BasePart") then
+			biomeZones[biomeName] = {
+				part    = part,
+				species = species,
+				cframe  = part.CFrame,
+				size    = part.Size,
+			}
+			print("🌿 Zona cargada:", biomeName, "→", species)
+		end
+	end
+end
+
+local function isInsidePart(pos, zone)
+	-- Actualizar cframe/size por si el Part fue movido
+	if zone.part and zone.part.Parent then
+		zone.cframe = zone.part.CFrame
+		zone.size   = zone.part.Size
+	end
+	local localPos = zone.cframe:PointToObjectSpace(pos)
+	local half = zone.size / 2
+	return math.abs(localPos.X) <= half.X
+		and math.abs(localPos.Y) <= half.Y
+		and math.abs(localPos.Z) <= half.Z
+end
+
+local function getBiome(player)
+	local char = player.Character
+	if not char then return nil end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return nil end
+	local pos = root.Position
+
+	for biomeName, zone in pairs(biomeZones) do
+		-- Si el Part fue destruido, eliminar de la caché
+		if not zone.part or not zone.part.Parent then
+			biomeZones[biomeName] = nil
+		elseif isInsidePart(pos, zone) then
+			return biomeName, zone.species
+		end
+	end
+	return nil, nil
+end
+
+function BiomeDetector:start()
+	loadZones()
+
+	-- Registrar zonas nuevas
+	workspace.ChildAdded:Connect(function(child)
+		if BIOME_MAP[child.Name] then
+			task.wait(0.5)
+			loadZones()
+			print("🌿 Zona nueva detectada:", child.Name)
+		end
+	end)
+
+	-- Limpiar zonas destruidas
+	workspace.ChildRemoved:Connect(function(child)
+		if biomeZones[child.Name] then
+			biomeZones[child.Name] = nil
+			print("🌿 Zona eliminada:", child.Name)
+		end
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(CHECK_INTERVAL)
+			for _, player in ipairs(Players:GetPlayers()) do
+				local biomeName, species = getBiome(player)
+				if biomeName then
+					local currentBiome = player:GetAttribute("CurrentBiome")
+					if currentBiome == biomeName then
+						local timeIn = (player:GetAttribute("BiomeTime") or 0) + CHECK_INTERVAL
+						player:SetAttribute("BiomeTime", timeIn)
+						if timeIn >= MUTATION_THRESHOLD then
+							local currentSpecies = player:GetAttribute("Species") or "StarPerson"
+							if currentSpecies ~= species then
+								if not MutationController then
+									local ok, mc = pcall(require, script.Parent.MutationController)
+									if ok then MutationController = mc end
+								end
+								if MutationController then
+									pcall(MutationController.mutate, MutationController, player, species)
+									print("🧬 Mutación por bioma:", player.Name, "→", species)
+								end
+							end
+							player:SetAttribute("BiomeTime", 0)
+						end
+					else
+						player:SetAttribute("CurrentBiome", biomeName)
+						player:SetAttribute("BiomeTime", 0)
+					end
+				else
+					if player:GetAttribute("CurrentBiome") then
+						player:SetAttribute("CurrentBiome", nil)
+						player:SetAttribute("BiomeTime", 0)
+					end
+				end
+			end
+		end
+	end)
+
+	print("✅ BiomeDetector iniciado — revisión cada", CHECK_INTERVAL .. "s")
+end
+
+function BiomeDetector:forceZoneCheck(player)
+	local biomeName, species = getBiome(player)
+	if species and MutationController then
+		pcall(MutationController.mutate, MutationController, player, species)
+	end
+end
+
+function BiomeDetector:getActiveZones()
+	local result = {}
+	for name, zone in pairs(biomeZones) do
+		table.insert(result, { name = name, species = zone.species })
+	end
+	return result
+end
+
+return BiomeDetector
