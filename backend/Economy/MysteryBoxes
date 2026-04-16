@@ -1,0 +1,63 @@
+-- Core/Economy/MysteryBoxes
+local MysteryBoxes = {}
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RelicsManager = require(script.Parent.RelicsManager)
+
+local BOXES = {
+	Comun = {
+		name = "📦 Caja de Carne Común", price = 10,
+		drops = {
+			{ relic = "FragmentoHueso", min = 5, max = 15, weight = 60 },
+			{ relic = "ADNPterosapiens", min = 1, max = 3, weight = 30 },
+			{ relic = "CarneDeQu", min = 1, max = 1, weight = 10 }
+		}
+	},
+	Rara = {
+		name = "🔮 Caja de Carne Rara", price = 50,
+		drops = {
+			{ relic = "CarneDeQu", min = 3, max = 7, weight = 50 },
+			{ relic = "ADNPterosapiens", min = 2, max = 5, weight = 40 },
+			{ relic = "ADNLegendario", min = 1, max = 1, weight = 10 }
+		}
+	}
+}
+
+function MysteryBoxes:init()
+	local openEvent = Instance.new("RemoteEvent")
+	openEvent.Name = "OpenMysteryBox"
+	openEvent.Parent = ReplicatedStorage
+	openEvent.OnServerEvent:Connect(function(player, boxType) self:openBox(player, boxType) end)
+end
+
+function MysteryBoxes:openBox(player, boxType)
+	local box = BOXES[boxType]
+	if not box then return end
+	if RelicsManager:getRelicCount(player, "CarneDeQu") < box.price then
+		self:sendResult(player, "error", "No tienes suficiente Carne de Qu")
+		return
+	end
+	RelicsManager:takeRelic(player, "CarneDeQu", box.price)
+
+	local totalWeight = 0
+	for _, drop in ipairs(box.drops) do totalWeight = totalWeight + drop.weight end
+	local roll = math.random(1, totalWeight)
+	local cumulative = 0
+	local chosen = nil
+	for _, drop in ipairs(box.drops) do
+		cumulative = cumulative + drop.weight
+		if roll <= cumulative then chosen = drop break end
+	end
+	if not chosen then chosen = box.drops[1] end
+
+	local amount = math.random(chosen.min, chosen.max)
+	RelicsManager:giveRelic(player, chosen.relic, amount)
+	self:sendResult(player, "success", { [chosen.relic] = amount })
+end
+
+function MysteryBoxes:sendResult(player, status, data)
+	local event = ReplicatedStorage:FindFirstChild("MysteryBoxResult")
+	if event then event:FireClient(player, status, data) end
+end
+
+return MysteryBoxes
