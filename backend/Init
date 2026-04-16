@@ -1,0 +1,65 @@
+--!strict
+-- ServerScriptService/Init — MEAT Project
+local DirectorMonitor  = require(script.Parent.Core.Director.DirectorMonitor)
+local DirectorDecider  = require(script.Parent.Core.Director.DirectorDecider)
+local DirectorExecutor = require(script.Parent.Core.Director.DirectorExecutor)
+local CalendarService  = require(script.Parent.Core.Director.CalendarService.CalendarService)
+local BiomeDetector    = require(script.Parent.Core.Evolution.BiomeDetector)
+local CypherManager    = require(script.Parent.Core.CypherManager)
+local RelicsManager    = require(script.Parent.Core.Economy.RelicsManager)
+local DuelManager      = require(script.Parent.Core.Arena.DuelManager)
+local MysteryBoxes     = require(script.Parent.Core.Economy.MysteryBoxes)
+local TradingSystem    = require(script.Parent.Core.Economy.TradingSystem)
+local ArenaEvents      = require(script.Parent.Core.Arena.ArenaEvents)
+local CombatManager    = require(script.Parent.Core.Combat.CombatManager)
+local Players          = game:GetService("Players")
+
+print("🜁 LA CARNE DESPIERTA. EL JUEGO RESPIRA.")
+
+CalendarService:startDay()
+BiomeDetector:start()
+-- CypherManager no requiere init() — se auto-inicializa via RemoteEvent
+RelicsManager:init()
+DuelManager:init()
+MysteryBoxes:init()
+TradingSystem:init()
+ArenaEvents:init()
+CombatManager:init()
+
+-- Kill tracking
+local function setupKillTracking(player: Player)
+	player.CharacterAdded:Connect(function(char)
+		local hum = char:WaitForChild("Humanoid") :: Humanoid
+		hum.Died:Connect(function()
+			local killerName = player:GetAttribute("LastHitBy") :: string?
+			local killer = killerName and Players:FindFirstChild(killerName) :: Player?
+			RelicsManager:onPlayerKilled(player, killer)
+			task.defer(function() player:SetAttribute("LastHitBy", nil) end)
+		end)
+	end)
+end
+
+Players.PlayerAdded:Connect(setupKillTracking)
+for _, p in ipairs(Players:GetPlayers()) do setupKillTracking(p) end
+
+-- Director loop con watchdog — si crashea, se reinicia
+local DIRECTOR_INTERVAL = 30
+local function directorLoop()
+	while true do
+		task.wait(DIRECTOR_INTERVAL)
+		local ok, err = pcall(function()
+			local anger   = DirectorMonitor:calculateAnger()
+			local metrics = DirectorMonitor:getMetrics()
+			local event   = DirectorDecider:decide(metrics, anger)
+			if event then
+				DirectorExecutor:execute(event)
+				DirectorMonitor:reportEvent(event)
+			end
+		end)
+		if not ok then
+			warn("🜁 Director loop error (continuando):", err)
+		end
+	end
+end
+
+task.spawn(directorLoop)
