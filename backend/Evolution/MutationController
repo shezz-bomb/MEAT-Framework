@@ -1,0 +1,147 @@
+-- MutationController — MEAT Project
+local MutationController = {}
+local Players = game:GetService("Players")
+
+local function getModules()
+	local SS = game:GetService("ServerScriptService")
+	local CarneEffects = require(SS.Modules.Effects)
+	local Narrative    = require(SS.Modules.NarrativeGenerator)
+	return CarneEffects, Narrative
+end
+
+local SPECIES_STATS = {
+	VacaHumana      = { walkSpeed = 12, jumpPower = 35, maxHealth = 150 },
+	CorredorDeManos = { walkSpeed = 28, jumpPower = 70, maxHealth = 80  },
+	MasaLlorosa     = { walkSpeed = 8,  jumpPower = 20, maxHealth = 200 },
+	AlfombraDeCarne = { walkSpeed = 10, jumpPower = 25, maxHealth = 180 },
+	TapeteDeEntrada = { walkSpeed = 14, jumpPower = 40, maxHealth = 100 },
+	StarPerson      = { walkSpeed = 16, jumpPower = 50, maxHealth = 100 },
+}
+
+local SPECIES_DATA = {}
+local function loadSpecies()
+	for _, module in ipairs(script.Parent.SpeciesData:GetChildren()) do
+		if module:IsA("ModuleScript") and SPECIES_STATS[module.Name] then
+			local ok, data = pcall(require, module)
+			if ok then
+				SPECIES_DATA[module.Name] = data
+				print("🧬 Especie cargada:", module.Name)
+			end
+		end
+	end
+end
+loadSpecies()
+
+local function applyStats(player, speciesName)
+	local char = player.Character
+	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+	local stats = SPECIES_STATS[speciesName] or SPECIES_STATS.StarPerson
+	hum.WalkSpeed  = stats.walkSpeed
+	hum.JumpPower  = stats.jumpPower
+	hum.MaxHealth  = stats.maxHealth
+	hum.Health     = stats.maxHealth
+end
+
+local mutationCooldowns = {}
+local MUTATION_COOLDOWN = 10
+
+-- Flag para evitar doble LoadCharacter simultáneo
+local loadingCharacter = {}
+
+function MutationController:mutate(player, newSpecies)
+	if not SPECIES_STATS[newSpecies] then
+		warn("MutationController: Especie desconocida:", newSpecies)
+		return
+	end
+
+	-- Cooldown
+	local now = tick()
+	if mutationCooldowns[player] and (now - mutationCooldowns[player]) < MUTATION_COOLDOWN then return end
+	mutationCooldowns[player] = now
+
+	-- Evitar doble spawn simultáneo
+	if loadingCharacter[player] then return end
+
+	local oldSpecies = player:GetAttribute("Species") or "VacaHumana"
+	if oldSpecies == newSpecies then return end
+
+	local CarneEffects, Narrative = getModules()
+
+	-- Limpiar especie anterior
+	local oldData = SPECIES_DATA[oldSpecies]
+	if oldData and oldData.onUnequip then pcall(oldData.onUnequip, player) end
+
+	player:SetAttribute("Species", newSpecies)
+	player:SetAttribute("PreviousSpecies", oldSpecies)
+
+	-- Efecto cocoon
+	if player.Character then
+		pcall(CarneEffects.cocoon, CarneEffects, player.Character, 2)
+		task.wait(2)
+	end
+
+	-- Verificar que el jugador sigue en el servidor
+	if not player or not player.Parent then return end
+
+	-- LoadCharacter con flag anti-doble-spawn
+	loadingCharacter[player] = true
+	local char = player.Character
+	if char then char:Destroy() end
+	player:LoadCharacter()
+
+	-- Esperar a que el nuevo personaje esté listo
+	local newChar = player.CharacterAdded:Wait()
+	task.wait(0.2)
+	loadingCharacter[player] = nil
+
+	-- Stats + aura
+	applyStats(player, newSpecies)
+	if player.Character then
+		pcall(CarneEffects.applySpeciesAura, CarneEffects, player.Character, newSpecies)
+	end
+
+	-- Equip nueva especie
+	local newData = SPECIES_DATA[newSpecies]
+	if newData and newData.onEquip then pcall(newData.onEquip, player) end
+
+	-- Asignar Cyphers
+	local ok, CypherManager = pcall(require, game:GetService("ServerScriptService").Core.CypherManager)
+	if ok then pcall(CypherManager.assignRandomLoadout, CypherManager, player) end
+
+	-- Mensaje narrativo
+	local msg = Narrative:generate("Mutation", {
+		player  = player.Name,
+		species = newSpecies,
+	})
+	local m = Instance.new("Message")
+	m.Text = "🧬 " .. msg
+	m.Parent = workspace
+	task.delay(8, function() if m and m.Parent then m:Destroy() end end)
+
+	print("🧬 Mutación:", player.Name, oldSpecies, "→", newSpecies)
+end
+
+function MutationController:forceMutate(player, speciesName)
+	mutationCooldowns[player] = nil
+	self:mutate(player, speciesName)
+end
+
+function MutationController:mutateRandom(player)
+	local options = {}
+	for name in pairs(SPECIES_STATS) do
+		if name ~= (player:GetAttribute("Species") or "VacaHumana") then
+			table.insert(options, name)
+		end
+	end
+	if #options == 0 then return end
+	self:forceMutate(player, options[math.random(#options)])
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	mutationCooldowns[player] = nil
+	loadingCharacter[player] = nil
+end)
+
+return MutationController
