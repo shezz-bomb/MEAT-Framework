@@ -1,0 +1,51 @@
+--!strict
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local networking = ReplicatedStorage:FindFirstChild("Networking")
+local ClientEvents = networking and networking:FindFirstChild("ClientEvents")
+local DirectorMessageRemote = ClientEvents and ClientEvents:FindFirstChild("DirectorMessage")
+
+if not DirectorMessageRemote then return end
+
+local player = game.Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "DirectorMessages"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local messageLabel = Instance.new("TextLabel")
+messageLabel.Size = UDim2.new(0, 500, 0, 60)
+messageLabel.Position = UDim2.new(0.5, -250, 0.1, 0)
+messageLabel.BackgroundTransparency = 0.6
+messageLabel.BackgroundColor3 = Color3.new(0, 0, 0)
+messageLabel.TextColor3 = Color3.new(0.8, 0.1, 0.1)
+messageLabel.Font = Enum.Font.GothamBlack
+messageLabel.TextSize = 28
+messageLabel.TextStrokeTransparency = 0.5
+messageLabel.TextWrapped = true
+messageLabel.Visible = false
+messageLabel.Parent = screenGui
+
+-- Cola de mensajes para evitar que uno pise al otro
+local queue = {}
+local processing = false
+
+local function processQueue()
+    if processing or #queue == 0 then return end
+    processing = true
+    local item = table.remove(queue, 1)
+    messageLabel.Text = item.msg
+    messageLabel.Visible = true
+    task.wait(item.duration)
+    messageLabel.Visible = false
+    task.wait(0.3) -- pausa entre mensajes
+    processing = false
+    processQueue()
+end
+
+DirectorMessageRemote.OnClientEvent:Connect(function(msg: string, duration: number?)
+    table.insert(queue, { msg = msg, duration = duration or 8 })
+    processQueue()
+end)
