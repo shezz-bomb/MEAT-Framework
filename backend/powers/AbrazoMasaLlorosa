@@ -1,0 +1,448 @@
+--!strict
+-- ============================================================================
+--  MÓDULO: AbrazoMasaLlorosa_VFX2026.lua
+--  DESCRIPCIÓN: Poder que inmoviliza a un enemigo con efectos VFX de nivel 2026:
+--  MeshParts procedurales, partículas en ráfaga, luces con flicker sinusoidal,
+--  curvas Bezier, alineación a normales y limpieza automática.
+-- ============================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local Debris = game:GetService("Debris")
+local Workspace = game:GetService("Workspace")
+
+local PowerVFX = ReplicatedStorage:FindFirstChild("PowerVFXEvent")
+
+-- ============================ CONSTANTES DE JUEGO ============================
+local RANGE = 12
+local STUN_DURATION = 3
+local SLOW_MOTION_FACTOR = 0.5
+local SLOW_MOTION_DURATION = 0.4
+
+-- IDs de sonido
+local SOUND_CRY = "rbxassetid://9121908000"
+local SOUND_SLIME = "rbxassetid://9121909000"
+local SOUND_STUN = "rbxassetid://9121910000"
+
+-- ============================ CONSTANTES VFX 2026 ============================
+local LIGHT_FLICKER_FREQ = 8
+local PARTICLE_BURST_COUNT = 32
+local MESH_ALPHA_MASK_ID = "rbxassetid://128576183"
+local FORCEFIELD_MATERIAL = Enum.Material.ForceField
+local NEON_MATERIAL = Enum.Material.Neon
+local SLIME_COLOR = Color3.fromRGB(100, 200, 150)
+local TEAR_COLOR = Color3.fromRGB(80, 180, 255)
+
+-- ============================ UTILIDADES VFX ============================
+local VFXUtils = {}
+
+function VFXUtils.createEnergyMesh(shape: string, size: Vector3, color: Color3, cframe: CFrame, parent: Instance?): MeshPart
+	local mesh = Instance.new("MeshPart")
+	mesh.Size = size
+	mesh.Color = color
+	mesh.Material = FORCEFIELD_MATERIAL
+	mesh.Anchored = true
+	mesh.CanCollide = false
+	mesh.CFrame = cframe
+	mesh.Transparency = 0.35
+
+	local meshId = "rbxassetid://" .. (shape == "Cylinder" and "1033714" or "1033710")
+	local specialMesh = Instance.new("SpecialMesh")
+	specialMesh.MeshId = meshId
+	specialMesh.Scale = Vector3.new(1,1,1)
+	specialMesh.Parent = mesh
+
+	local surfaceGui = Instance.new("SurfaceGui")
+	surfaceGui.Face = Enum.NormalId.Front
+	surfaceGui.AlwaysOnTop = true
+	surfaceGui.Brightness = 0
+	surfaceGui.Transparency = 0
+	surfaceGui.ClipsDescendants = false
+	surfaceGui.Parent = mesh
+
+	local imageLabel = Instance.new("ImageLabel")
+	imageLabel.Size = UDim2.new(1,0,1,0)
+	imageLabel.BackgroundTransparency = 1
+	imageLabel.Image = MESH_ALPHA_MASK_ID
+	imageLabel.ImageTransparency = 0.5
+	imageLabel.ScaleType = Enum.ScaleType.Stretch
+	imageLabel.Parent = surfaceGui
+
+	mesh.Parent = parent or Workspace
+	return mesh
+end
+
+function VFXUtils.configureEmitter(emitter: ParticleEmitter, baseColor: Color3)
+	local sizeSeq = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0.15, 0.6),
+		NumberSequenceKeypoint.new(0.25, 1.1, -0.3),
+		NumberSequenceKeypoint.new(0.6, 0.7, -0.9),
+		NumberSequenceKeypoint.new(1, 0, -0.2)
+	}
+	emitter.Size = sizeSeq
+
+	local transSeq = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0, 0.3),
+		NumberSequenceKeypoint.new(0.3, 0.2, 0.2),
+		NumberSequenceKeypoint.new(0.7, 0.6, 0.4),
+		NumberSequenceKeypoint.new(1, 1, 0.2)
+	}
+	emitter.Transparency = transSeq
+
+	emitter.Color = ColorSequence.new(baseColor)
+	emitter.Rate = 0
+	emitter.Lifetime = NumberRange.new(0.7, 1.2)
+	emitter.Speed = NumberRange.new(4, 8)
+	emitter.SpreadAngle = Vector2.new(20, 50)
+	emitter.RotSpeed = NumberRange.new(-120, 120)
+	emitter.Acceleration = Vector3.new(0, 2, 0)
+	emitter.Drag = 1.5
+	emitter.LockedToPart = false
+	emitter.Enabled = true
+	emitter.VelocityInheritance = 0.15
+end
+
+function VFXUtils.emitBurst(position: Vector3, count: number, color: Color3, parent: Instance?)
+	local attachment = Instance.new("Attachment")
+	attachment.WorldPosition = position
+	attachment.Parent = parent or Workspace.Terrain
+
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Parent = attachment
+	VFXUtils.configureEmitter(emitter, color)
+
+	emitter:Emit(count)
+
+	task.delay(emitter.Lifetime.Max + 0.5, function()
+		attachment:Destroy()
+	end)
+end
+
+function VFXUtils.createFlickerLight(position: Vector3, baseColor: Color3, range: number, parent: Instance?, duration: number?)
+	local light = Instance.new("PointLight")
+	light.Position = position
+	light.Color = baseColor:Lerp(Color3.new(1,1,1), 0.2)
+	light.Range = range
+	light.Brightness = 3
+	light.Shadows = false
+	light.Parent = parent or Workspace
+
+	local connection
+	local startTime = os.clock()
+	connection = RunService.Heartbeat:Connect(function()
+		if not light.Parent then
+			connection:Disconnect()
+			return
+		end
+		local t = os.clock() - startTime
+		local flicker = 0.6 + 0.5 * math.sin(t * LIGHT_FLICKER_FREQ)
+		light.Brightness = math.clamp(3 * flicker, 1, 5)
+	end)
+
+	local cleanupDelay = duration or 1.5
+	task.delay(cleanupDelay, function()
+		if connection then connection:Disconnect() end
+		if light.Parent then light:Destroy() end
+	end)
+
+	return light
+end
+
+function VFXUtils.scaleAndFade(obj: BasePart, targetScale: Vector3, duration: number, callback: (() -> ())?)
+	local originalSize = obj.Size
+	local originalTransparency = obj.Transparency
+
+	local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	local tween = TweenService:Create(obj, tweenInfo, {
+		Size = targetScale,
+		Transparency = 1 - (originalSize.Magnitude / targetScale.Magnitude) * (1 - originalTransparency)
+	})
+
+	tween:Play()
+	if callback then
+		tween.Completed:Connect(callback)
+	end
+	return tween
+end
+
+-- ============================ EFECTOS ESPECÍFICOS ============================
+local AbrazoVFX = {}
+
+-- Masa viscosa (MeshPart esférico con pulso)
+function AbrazoVFX.createSlimeWrap(targetRoot: BasePart, duration: number)
+	local wrapMesh = VFXUtils.createEnergyMesh(
+		"Sphere",
+		Vector3.new(3, 3, 3),
+		SLIME_COLOR,
+		targetRoot.CFrame,
+		Workspace
+	)
+	wrapMesh.Material = NEON_MATERIAL
+	wrapMesh.Transparency = 0.45
+
+	-- Seguir al objetivo
+	local connection
+	connection = RunService.Heartbeat:Connect(function()
+		if not targetRoot.Parent then
+			connection:Disconnect()
+			wrapMesh:Destroy()
+			return
+		end
+		wrapMesh.CFrame = targetRoot.CFrame
+	end)
+
+	-- Pulso de escala
+	local tweenUp = TweenService:Create(wrapMesh, TweenInfo.new(0.4, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {Size = Vector3.new(4.5, 4.5, 4.5), Transparency = 0.6})
+	local tweenDown = TweenService:Create(wrapMesh, TweenInfo.new(0.4, Enum.EasingStyle.Quad), {Size = Vector3.new(3.5, 3.5, 3.5), Transparency = 0.5})
+	tweenUp:Play()
+	tweenUp.Completed:Connect(function() tweenDown:Play() end)
+	tweenDown.Completed:Connect(function() tweenUp:Play() end)
+
+	-- Desaparición al final
+	task.delay(duration, function()
+		connection:Disconnect()
+		VFXUtils.scaleAndFade(wrapMesh, Vector3.new(0,0,0), 0.4, function()
+			wrapMesh:Destroy()
+		end)
+	end)
+
+	return wrapMesh
+end
+
+-- Lágrimas alrededor del enemigo (burst periódico)
+function AbrazoVFX.createTearsOnEnemy(targetRoot: BasePart, duration: number)
+	local tearAttachment = Instance.new("Attachment")
+	tearAttachment.Parent = targetRoot
+
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Parent = tearAttachment
+	VFXUtils.configureEmitter(emitter, TEAR_COLOR)
+	emitter.Acceleration = Vector3.new(0, -8, 0)
+	emitter.Speed = NumberRange.new(2, 5)
+	emitter.SpreadAngle = Vector2.new(30, 60)
+
+	local bursts = 0
+	local burstInterval = 0.4
+	local maxBursts = math.floor(duration / burstInterval)
+
+	local burstLoop
+	burstLoop = RunService.Heartbeat:Connect(function()
+		if bursts >= maxBursts or not targetRoot.Parent then
+			burstLoop:Disconnect()
+			return
+		end
+		bursts += 1
+		emitter:Emit(12)
+	end)
+
+	task.delay(duration, function()
+		burstLoop:Disconnect()
+		emitter.Enabled = false
+		task.delay(0.5, function() tearAttachment:Destroy() end)
+	end)
+end
+
+-- Efecto de pantalla borrosa (Blur)
+function AbrazoVFX.blurScreen(duration: number, intensity: number)
+	local blur = Instance.new("BlurEffect")
+	blur.Size = intensity
+	blur.Parent = Lighting
+
+	local tween = TweenService:Create(blur, TweenInfo.new(duration, Enum.EasingStyle.Quad), {Size = 0})
+	tween:Play()
+	tween.Completed:Connect(function() blur:Destroy() end)
+end
+
+-- Efecto de lágrimas en UI (partículas en ScreenGui)
+function AbrazoVFX.cryScreenEffect(duration: number)
+	local player = Players.LocalPlayer
+	local playerGui = player:WaitForChild("PlayerGui")
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.IgnoreGuiInset = true
+	screenGui.Parent = playerGui
+
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	emitter.Color = ColorSequence.new(TEAR_COLOR)
+	emitter.Rate = 200
+	emitter.Lifetime = NumberRange.new(0.8)
+	emitter.SpreadAngle = Vector2.new(15, 15)
+	emitter.Speed = NumberRange.new(20, 50)
+	emitter.Acceleration = Vector3.new(0, -100, 0)
+	emitter.Transparency = NumberSequence.new(0.1, 0.9)
+	emitter.Enabled = true
+	emitter.Parent = screenGui
+
+	task.delay(duration, function()
+		emitter.Enabled = false
+		task.delay(0.5, function() screenGui:Destroy() end)
+	end)
+end
+
+-- Sacudida de cámara (sin cambios sustanciales)
+function AbrazoVFX.shakeCamera(duration: number, intensity: number)
+	local camera = Workspace.CurrentCamera
+	if not camera then return end
+	local originalCF = camera.CFrame
+	local start = tick()
+	local conn
+	conn = RunService.RenderStepped:Connect(function()
+		if tick() - start >= duration then
+			conn:Disconnect()
+			camera.CFrame = originalCF
+			return
+		end
+		local offset = Vector3.new(
+			(math.random() - 0.5) * intensity,
+			(math.random() - 0.5) * intensity,
+			0
+		)
+		camera.CFrame = originalCF * CFrame.new(offset)
+	end)
+end
+
+-- ============================ LÓGICA DE JUEGO ============================
+local function getNearestEnemy(player: Player, range: number): (Player?, number?)
+	local char = player.Character
+	if not char then return nil end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return nil end
+
+	local nearest, minDist = nil, range
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other == player then continue end
+		local otherChar = other.Character
+		if not otherChar then continue end
+		local otherRoot = otherChar:FindFirstChild("HumanoidRootPart")
+		local hum = otherChar:FindFirstChild("Humanoid")
+		if not otherRoot or not hum or hum.Health <= 0 then continue end
+
+		local dist = (otherRoot.Position - root.Position).Magnitude
+		if dist < minDist then
+			minDist = dist
+			nearest = other
+		end
+	end
+	return nearest, minDist
+end
+
+local function stunEnemy(targetRoot: BasePart, duration: number)
+	local bodyVel = Instance.new("BodyVelocity")
+	bodyVel.Velocity = Vector3.zero
+	bodyVel.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bodyVel.Parent = targetRoot
+	task.delay(duration, function()
+		bodyVel:Destroy()
+	end)
+end
+
+-- ============================ MÓDULO PRINCIPAL ============================
+return {
+	name = "🤗 EL ABRAZO DE LA MASA LLOROSA (VFX 2026)",
+	description = "Inmovilizas a un enemigo cercano por 3 segundos con un abrazo viscoso y lloroso.",
+	icon = "rbxassetid://123456789",
+	cooldown = 16,
+
+	onUse = function(player: Player)
+		local char = player.Character
+		if not char then return end
+		local playerRoot = char:FindFirstChild("HumanoidRootPart")
+		if not playerRoot then return end
+
+		local target, dist = getNearestEnemy(player, RANGE)
+		if not target then return end
+		local targetChar = target.Character
+		if not targetChar then return end
+		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+		if not targetRoot then return end
+
+		if (targetRoot.Position - playerRoot.Position).Magnitude > RANGE then return end
+
+		-- ========== SONIDOS ==========
+		local function playSound(soundId, vol, pitch, pos)
+			local part = Instance.new("Part")
+			part.Anchored = true
+			part.CanCollide = false
+			part.Transparency = 1
+			part.Size = Vector3.new(1,1,1)
+			part.Position = pos
+			part.Parent = Workspace
+			local sound = Instance.new("Sound", part)
+			sound.SoundId = soundId
+			sound.Volume = vol
+			sound.PlaybackSpeed = pitch
+			sound:Play()
+			Debris:AddItem(part, sound.TimeLength + 0.5)
+		end
+
+		playSound(SOUND_CRY, 0.8, 1, targetRoot.Position)
+		playSound(SOUND_SLIME, 0.7, 0.9, targetRoot.Position)
+		playSound(SOUND_STUN, 0.6, 1.1, playerRoot.Position)
+
+		-- ========== VFX 2026 ==========
+		-- Masa viscosa (MeshPart)
+		AbrazoVFX.createSlimeWrap(targetRoot, STUN_DURATION)
+
+		-- Lágrimas en el enemigo (burst de partículas)
+		AbrazoVFX.createTearsOnEnemy(targetRoot, STUN_DURATION)
+
+		-- Luz de abrazo (flicker)
+		local hugLight = VFXUtils.createFlickerLight(targetRoot.Position, SLIME_COLOR, 8, Workspace, STUN_DURATION)
+		local lightFollowConn = RunService.Heartbeat:Connect(function()
+			if not targetRoot.Parent then
+				lightFollowConn:Disconnect()
+				return
+			end
+			hugLight.Position = targetRoot.Position
+		end)
+		task.delay(STUN_DURATION, function() lightFollowConn:Disconnect() end)
+
+		-- Ráfaga inicial de partículas viscosas
+		VFXUtils.emitBurst(targetRoot.Position, PARTICLE_BURST_COUNT, SLIME_COLOR, Workspace)
+
+		-- Efectos de cámara/pantalla
+		AbrazoVFX.shakeCamera(0.3, 2.5)
+		AbrazoVFX.blurScreen(0.8, 12)
+		AbrazoVFX.cryScreenEffect(1.5)
+
+		-- Onda de choque inicial (MeshPart)
+		local shockwave = VFXUtils.createEnergyMesh(
+			"Cylinder",
+			Vector3.new(0.5, 0.1, 0.5),
+			TEAR_COLOR,
+			CFrame.new(targetRoot.Position),
+			Workspace
+		)
+		shockwave.Material = NEON_MATERIAL
+		VFXUtils.scaleAndFade(shockwave, Vector3.new(6, 0.1, 6), 0.4, function()
+			shockwave:Destroy()
+		end)
+
+		-- ========== INMOVILIZACIÓN ==========
+		target:SetAttribute("Stunned", true)
+		stunEnemy(targetRoot, STUN_DURATION)
+
+		local humanoid = targetChar:FindFirstChild("Humanoid")
+		local originalSpeed = humanoid and humanoid.WalkSpeed or 16
+		if humanoid then
+			humanoid.WalkSpeed = 0
+		end
+
+		task.delay(STUN_DURATION, function()
+			if target and target.Parent then
+				target:SetAttribute("Stunned", nil)
+			end
+			if humanoid and humanoid.Parent then
+				humanoid.WalkSpeed = originalSpeed
+			end
+		end)
+
+		-- Señal remota
+		if PowerVFX then
+			PowerVFX:FireClient(player, "ElAbrazoDeLaMasaLlorosa", targetRoot.Position)
+		end
+	end
+}
