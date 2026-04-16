@@ -1,11 +1,10 @@
-```markdown
-# 🧠 MEAT Framework — Roblox Developer Portfolio
+MEAT Framework — Roblox Developer Portfolio
 
-**Sistemas modulares para juegos de combate en Luau. Código autocontenido y listo para producción.**
+Sistemas modulares para juegos de combate en Luau. Código autocontenido y listo para producción.
 
-## 📁 Estructura del Repositorio
 
-```
+ESTRUCTURA DEL REPOSITORIO
+
 MEAT-Framework/
 ├── backend/
 │   ├── DirectorSystem/
@@ -29,45 +28,66 @@ MEAT-Framework/
 │   └── HUDScript.lua
 ├── README.md
 └── LICENSE
-```
 
-## 🎮 Habilidades (Powers)
 
-Cada habilidad es **autocontenida**. Copia el archivo `.lua`, ajusta los IDs de sonido si quieres, y funciona.
+HABILIDADES (POWERS)
 
-| Habilidad | Tipo | Descripción |
-| :--- | :--- | :--- |
-| `CadenaDeCarne` | Gancho | Atrae al enemigo más cercano con una cadena helicoidal procedural. Incluye cliente con aiming por Beam. |
-| `TransformacionVacaHumana` | Buff | +50 HP máximo, +30% daño durante 8s. Aura visual pulsante, tinte rojo y sonidos 3D. |
-| `AbrazoMasaLlorosa` | Stun | Inmoviliza a un enemigo 3s. Efectos de masa viscosa, lágrimas en UI y blur de pantalla. |
-| `OndaOlorPutrefacto` | AoE + DoT | Daño inicial (25) + veneno (5/s durante 3s) en radio 12. Onda expansiva y partículas de gas. |
-| `DesmembramientoVoluntario` | Proyectil | Lanza un brazo que causa 35 de daño al impactar. Trail de sangre e impacto alineado a superficies. |
-| `NamNamFinal` | Ejecución | Si el enemigo tiene <30% HP, muerte instantánea. Explosión de sangre, trozos de carne y flash rojo. |
+Cada habilidad es autocontenida. Copia el archivo .lua, ajusta los IDs de sonido si quieres, y funciona.
 
-## ⚙️ Backend
+Cadena de Carne — Gancho
+Atrae al enemigo más cercano con una cadena helicoidal procedural. Incluye cliente con aiming por Beam.
 
-- **DirectorSystem:** IA que monitoriza métricas de jugadores, calcula "ira" y decide eventos dinámicos (meteoros, tormentas, cacerías).
-- **Economy:** Gestión de reliquias (`RelicsManager`) y cajas de loot con probabilidades ponderadas (`MysteryBoxes`).
+Transformacion Vaca Humana — Buff
++50 HP máximo, +30% daño durante 8s. Aura visual pulsante, tinte rojo y sonidos 3D.
 
-## 🖥️ UI
+Abrazo Masa Llorosa — Stun
+Inmoviliza a un enemigo 3s. Efectos de masa viscosa, lágrimas en UI y blur de pantalla.
 
-- **HUDScript:** Interfaz generada dinámicamente por código. Muestra recursos (Entropía, Fragmentos) con cálculo de `+/seg` y panel de inventario desplegable.
+Onda Olor Putrefacto — AoE + DoT
+Daño inicial (25) + veneno (5/s durante 3s) en radio 12. Onda expansiva y partículas de gas.
 
-## 🚀 ¿Por qué este portafolio?
+Desmembramiento Voluntario — Proyectil
+Lanza un brazo que causa 35 de daño al impactar. Trail de sangre e impacto alineado a superficies.
 
-- **Modular:** cada sistema funciona de forma independiente.
-- **Autocontenido:** las habilidades no requieren módulos externos.
-- **Limpio y comentado:** `--!strict`, validaciones anti-exploit, limpieza automática de recursos.
-- **Game Feel AAA:** VFX procedurales, sonidos 3D, efectos de cámara y luces dinámicas.
+Nam Nam Final — Ejecución
+Si el enemigo tiene menos del 30% de HP, muerte instantánea. Explosión de sangre, trozos de carne y flash rojo.
 
----
 
-**Desarrollado por Cristhian Ayala**  
-*"No cuento años. Cuento sistemas complejos entregados."*
+BACKEND
 
-## ⚖️ Licencia
+DirectorSystem
+IA que monitoriza métricas de jugadores, calcula "ira" y decide eventos dinámicos (meteoros, tormentas, cacerías).
 
-MIT © 2026 Cristhian Ayala
+Economy
+Gestión de reliquias (RelicsManager) y cajas de loot con probabilidades ponderadas (MysteryBoxes).
+
+
+UI
+
+HUDScript
+Interfaz generada dinámicamente por código. Muestra recursos (Entropía, Fragmentos) con cálculo de +/seg y panel de inventario desplegable.
+
+
+POR QUÉ ESTE PORTAFOLIO
+
+- Modular: cada sistema funciona de forma independiente.
+- Autocontenido: las habilidades no requieren módulos externos.
+- Limpio y comentado: --!strict, validaciones anti-exploit, limpieza automática de recursos.
+- Game Feel AAA: VFX procedurales, sonidos 3D, efectos de cámara y luces dinámicas.
+
+
+AUTOR
+
+(Bombito / shezz-bomb)
+Roblox: @shezz-bomb
+Twitter/X: @Siposo1222
+GitHub: shezz-bomb
+
+"No cuento años. Cuento sistemas complejos entregados."
+
+
+LICENCIA
+
+MIT (c) 2026 Cristhian Ayala (Bombito)
 
 El código es libre para usar, modificar y distribuir. Mi tiempo y experiencia para adaptarlo a tu proyecto son de pago.
-```
