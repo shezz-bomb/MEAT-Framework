@@ -1,0 +1,295 @@
+--!strict
+-- ============================================================================
+--  MÓDULO: OndaDeOlorPutrefacto
+--  DESCRIPCIÓN: Onda nauseabunda que causa daño inicial y veneno en área.
+--  VFX 2026: MeshParts procedurales, partículas en ráfaga, luces con flicker
+--  sinusoidal, curvas Bezier y limpieza automática.
+-- ============================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+local Workspace = game:GetService("Workspace")
+
+local DamageEvent = ReplicatedStorage:FindFirstChild("DamageEvent")
+local PowerVFX = ReplicatedStorage:FindFirstChild("PowerVFXEvent")
+
+-- ============================ CONSTANTES DE JUEGO ============================
+local RADIO_ONDAS = 12
+local DANIO_INICIAL = 25
+local DANIO_VENENO_POR_TICK = 5
+local DURACION_VENENO = 3
+local INTERVALO_VENENO = 1
+
+-- ============================ CONSTANTES VFX 2026 ============================
+local LIGHT_FLICKER_FREQ = 9
+local PARTICLE_BURST_COUNT = 40
+local MESH_ALPHA_MASK_ID = "rbxassetid://128576183"
+local FORCEFIELD_MATERIAL = Enum.Material.ForceField
+local NEON_MATERIAL = Enum.Material.Neon
+local GAS_COLOR = Color3.fromRGB(85, 107, 47)
+local VENOM_COLOR = Color3.fromRGB(120, 80, 40)
+
+-- ============================ UTILIDADES VFX ============================
+local VFXUtils = {}
+
+function VFXUtils.createEnergyMesh(shape: string, size: Vector3, color: Color3, cframe: CFrame, parent: Instance?): MeshPart
+	local mesh = Instance.new("MeshPart")
+	mesh.Size = size
+	mesh.Color = color
+	mesh.Material = FORCEFIELD_MATERIAL
+	mesh.Anchored = true
+	mesh.CanCollide = false
+	mesh.CFrame = cframe
+	mesh.Transparency = 0.4
+
+	local meshId = "rbxassetid://" .. (shape == "Cylinder" and "1033714" or "1033710")
+	local specialMesh = Instance.new("SpecialMesh")
+	specialMesh.MeshId = meshId
+	specialMesh.Scale = Vector3.new(1,1,1)
+	specialMesh.Parent = mesh
+
+	local surfaceGui = Instance.new("SurfaceGui")
+	surfaceGui.Face = Enum.NormalId.Front
+	surfaceGui.AlwaysOnTop = true
+	surfaceGui.Brightness = 0
+	surfaceGui.Transparency = 0
+	surfaceGui.ClipsDescendants = false
+	surfaceGui.Parent = mesh
+
+	local imageLabel = Instance.new("ImageLabel")
+	imageLabel.Size = UDim2.new(1,0,1,0)
+	imageLabel.BackgroundTransparency = 1
+	imageLabel.Image = MESH_ALPHA_MASK_ID
+	imageLabel.ImageTransparency = 0.5
+	imageLabel.ScaleType = Enum.ScaleType.Stretch
+	imageLabel.Parent = surfaceGui
+
+	mesh.Parent = parent or Workspace
+	return mesh
+end
+
+function VFXUtils.configureEmitter(emitter: ParticleEmitter, baseColor: Color3)
+	local sizeSeq = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0.2, 0.6),
+		NumberSequenceKeypoint.new(0.3, 1.3, -0.4),
+		NumberSequenceKeypoint.new(0.7, 0.9, -0.8),
+		NumberSequenceKeypoint.new(1, 0, -0.2)
+	}
+	emitter.Size = sizeSeq
+
+	local transSeq = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0, 0.3),
+		NumberSequenceKeypoint.new(0.4, 0.25, 0.2),
+		NumberSequenceKeypoint.new(0.8, 0.7, 0.4),
+		NumberSequenceKeypoint.new(1, 1, 0.2)
+	}
+	emitter.Transparency = transSeq
+
+	emitter.Color = ColorSequence.new(baseColor)
+	emitter.Rate = 0
+	emitter.Lifetime = NumberRange.new(0.9, 1.5)
+	emitter.Speed = NumberRange.new(4, 9)
+	emitter.SpreadAngle = Vector2.new(30, 60)
+	emitter.RotSpeed = NumberRange.new(-90, 90)
+	emitter.Acceleration = Vector3.new(0, 2, 0)
+	emitter.Drag = 1.2
+	emitter.LockedToPart = false
+	emitter.Enabled = true
+	emitter.VelocityInheritance = 0.1
+end
+
+function VFXUtils.emitBurst(position: Vector3, count: number, color: Color3, parent: Instance?)
+	local attachment = Instance.new("Attachment")
+	attachment.WorldPosition = position
+	attachment.Parent = parent or Workspace.Terrain
+
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Parent = attachment
+	VFXUtils.configureEmitter(emitter, color)
+
+	emitter:Emit(count)
+
+	task.delay(emitter.Lifetime.Max + 0.5, function()
+		attachment:Destroy()
+	end)
+end
+
+function VFXUtils.createFlickerLight(position: Vector3, baseColor: Color3, range: number, parent: Instance?, duration: number?)
+	local light = Instance.new("PointLight")
+	light.Position = position
+	light.Color = baseColor:Lerp(Color3.new(1,1,1), 0.2)
+	light.Range = range
+	light.Brightness = 4
+	light.Shadows = false
+	light.Parent = parent or Workspace
+
+	local connection
+	local startTime = os.clock()
+	connection = RunService.Heartbeat:Connect(function()
+		if not light.Parent then
+			connection:Disconnect()
+			return
+		end
+		local t = os.clock() - startTime
+		local flicker = 0.6 + 0.5 * math.sin(t * LIGHT_FLICKER_FREQ)
+		light.Brightness = math.clamp(4 * flicker, 1.5, 6)
+	end)
+
+	local cleanupDelay = duration or 1.2
+	task.delay(cleanupDelay, function()
+		if connection then connection:Disconnect() end
+		if light.Parent then light:Destroy() end
+	end)
+
+	return light
+end
+
+function VFXUtils.scaleAndFade(obj: BasePart, targetScale: Vector3, duration: number, callback: (() -> ())?)
+	local originalSize = obj.Size
+	local originalTransparency = obj.Transparency
+
+	local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	local tween = TweenService:Create(obj, tweenInfo, {
+		Size = targetScale,
+		Transparency = 1 - (originalSize.Magnitude / targetScale.Magnitude) * (1 - originalTransparency)
+	})
+
+	tween:Play()
+	if callback then
+		tween.Completed:Connect(callback)
+	end
+	return tween
+end
+
+-- ============================ EFECTOS DE LA ONDA ============================
+local OndaVFX = {}
+
+function OndaVFX.crearOndaPutrefacta(posicion: Vector3, radio: number)
+	-- MeshPart esférico para la onda principal
+	local ondaMesh = VFXUtils.createEnergyMesh(
+		"Sphere",
+		Vector3.new(1, 1, 1),
+		GAS_COLOR,
+		CFrame.new(posicion),
+		Workspace
+	)
+	ondaMesh.Material = NEON_MATERIAL
+	ondaMesh.Transparency = 0.5
+
+	-- Partículas de gas (burst-driven)
+	local attachment = Instance.new("Attachment")
+	attachment.WorldPosition = posicion
+	attachment.Parent = Workspace.Terrain
+
+	local gasEmitter = Instance.new("ParticleEmitter")
+	gasEmitter.Parent = attachment
+	VFXUtils.configureEmitter(gasEmitter, VENOM_COLOR)
+	gasEmitter.Acceleration = Vector3.new(0, 1, 0)
+	gasEmitter.SpreadAngle = Vector2.new(40, 80)
+	gasEmitter:Emit(PARTICLE_BURST_COUNT)
+
+	-- Luz de impacto (flicker)
+	VFXUtils.createFlickerLight(posicion, GAS_COLOR, radio * 1.2, Workspace, 1.5)
+
+	-- Expansión con escala sincronizada a transparencia
+	VFXUtils.scaleAndFade(ondaMesh, Vector3.new(radio * 2, radio * 2, radio * 2), 0.4, function()
+		ondaMesh:Destroy()
+		attachment:Destroy()
+	end)
+
+	-- Segunda oleada de partículas al final de la expansión
+	task.delay(0.25, function()
+		VFXUtils.emitBurst(posicion, math.floor(PARTICLE_BURST_COUNT / 2), VENOM_COLOR, Workspace)
+	end)
+end
+
+-- ============================ LÓGICA DE JUEGO ============================
+local function obtenerJugadoresEnRadio(centro: Vector3, radio: number, jugadorIgnorado: Player): {Player}
+	local victimas = {}
+	for _, otroJugador in ipairs(Players:GetPlayers()) do
+		if otroJugador == jugadorIgnorado then continue end
+		local personaje = otroJugador.Character
+		if not personaje then continue end
+		local raiz = personaje:FindFirstChild("HumanoidRootPart")
+		if not raiz then continue end
+		local humanoid = personaje:FindFirstChild("Humanoid")
+		if not humanoid or humanoid.Health <= 0 then continue end
+
+		local distancia = (raiz.Position - centro).Magnitude
+		if distancia <= radio then
+			table.insert(victimas, otroJugador)
+		end
+	end
+	return victimas
+end
+
+local function aplicarVeneno(victima: Player, fuente: Player, duracion: number, danioPorTick: number, intervalo: number)
+	for _ = 1, duracion do
+		task.wait(intervalo)
+		local personaje = victima.Character
+		if not personaje then break end
+		local humanoid = personaje:FindFirstChild("Humanoid")
+		if not humanoid or humanoid.Health <= 0 then break end
+
+		if humanoid and humanoid.Health > 0 then
+			humanoid:TakeDamage(danioPorTick)
+		end
+		if DamageEvent then
+			DamageEvent:FireClient(victima, {action = "hit", amount = danioPorTick})
+		end
+	end
+end
+
+-- ============================ MÓDULO PRINCIPAL ============================
+return {
+	name = "💨 ONDA DE OLOR PUTREFACTO (VFX 2026)",
+	description = "Liberas una onda nauseabunda que causa 25 de daño y veneno (5 por segundo durante 3s) en radio 12.",
+	icon = "rbxassetid://123456789",
+	cooldown = 18,
+
+	onUse = function(jugador: Player)
+		local personaje = jugador.Character
+		if not personaje then return end
+		local raiz = personaje:FindFirstChild("HumanoidRootPart")
+		if not raiz then return end
+
+		local centro = raiz.Position
+
+		-- Efecto visual 2026
+		OndaVFX.crearOndaPutrefacta(centro, RADIO_ONDAS)
+
+		-- Notificar a otros clientes (opcional)
+		if PowerVFX then
+			PowerVFX:FireClient(jugador, "OndaDeOlorPutrefacto", centro)
+		end
+
+		-- Obtener víctimas en el radio
+		local victimas = obtenerJugadoresEnRadio(centro, RADIO_ONDAS, jugador)
+
+		for _, victima in ipairs(victimas) do
+			local personajeVictima = victima.Character
+			if personajeVictima then
+				local raizVictima = personajeVictima:FindFirstChild("HumanoidRootPart")
+				if raizVictima then
+					local distanciaActual = (centro - raizVictima.Position).Magnitude
+					if distanciaActual <= RADIO_ONDAS then
+						-- Daño inicial
+						local humanoid = personajeVictima:FindFirstChild("Humanoid")
+						if humanoid and humanoid.Health > 0 then
+							humanoid:TakeDamage(DANIO_INICIAL)
+						end
+						if DamageEvent then
+							DamageEvent:FireClient(victima, {action = "hit", amount = DANIO_INICIAL})
+						end
+
+						-- Veneno en hilo separado
+						task.spawn(aplicarVeneno, victima, jugador, DURACION_VENENO, DANIO_VENENO_POR_TICK, INTERVALO_VENENO)
+					end
+				end
+			end
+		end
+	end
+}
