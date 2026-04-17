@@ -1,93 +1,69 @@
-MEAT Framework — Roblox Developer Portfolio
+# 🧠 MEAT Framework
 
-Sistemas modulares para juegos de combate en Luau. Código autocontenido y listo para producción.
+**Sistema modular completo para desarrollo de juegos en Roblox (Luau).**  
+Backend · Habilidades · Economía · UI · VFX
 
+---
 
-ESTRUCTURA DEL REPOSITORIO
+## 🚀 ¿Qué es MEAT Framework?
 
-MEAT-Framework/
-├── backend/
-│   ├── DirectorSystem/
-│   │   ├── DirectorMemory.lua
-│   │   ├── DirectorMonitor.lua
-│   │   ├── DirectorDecider.lua
-│   │   └── DirectorExecutor.lua
-│   ├── Economy/
-│   │   ├── RelicsManager.lua
-│   │   └── MysteryBoxes.lua
-│   └── Init.lua
-├── powers/
-│   ├── CadenaDeCarne_Server.lua
-│   ├── CadenaDeCarne_Client.lua
-│   ├── TransformacionVacaHumana.lua
-│   ├── AbrazoMasaLlorosa.lua
-│   ├── OndaOlorPutrefacto.lua
-│   ├── DesmembramientoVoluntario.lua
-│   └── NamNamFinal.lua
-├── ui/
-│   └── HUDScript.lua
-├── README.md
-└── LICENSE
+Un conjunto de módulos autocontenidos y listos para producción que cubren todas las capas de un juego multijugador: desde la inteligencia artificial del director hasta las habilidades de los jugadores, pasando por la economía, el comercio y la interfaz de usuario.
 
+Cada componente está diseñado para funcionar de forma independiente. Copias el módulo que necesitas, lo configuras y funciona.
 
-HABILIDADES (POWERS)
+---
 
-Cada habilidad es autocontenida. Copia el archivo .lua, ajusta los IDs de sonido si quieres, y funciona.
+## ✨ Características principales
 
-Cadena de Carne — Gancho
-Atrae al enemigo más cercano con una cadena helicoidal procedural. Incluye cliente con aiming por Beam.
+- **🎮 Habilidades premium** – 6 poderes únicos (gancho, ejecución, stun, área, proyectil, transformación) con VFX procedural, sonidos 3D y game feel AAA.
+- **🧠 Director IA** – Sistema de eventos dinámicos que reacciona en tiempo real a las métricas de los jugadores (kills, vida, rachas) mediante selección ponderada e "ira".
+- **💰 Economía completa** – Gestión de reliquias, cajas de loot con probabilidades y comercio seguro entre jugadores (anti‑duplicación).
+- **⚔️ Combate flexible** – Sistema FFA con especies asimétricas, dash, knockback y duelos 1v1 con apuestas.
+- **🖥️ UI dinámica** – HUD generado por código, controladores de habilidades, inventario y anuncios.
+- **🧩 VFX procedural** – Luces con flicker, partículas en ráfaga, mallas procedurales y efectos de cámara.
 
-Transformacion Vaca Humana — Buff
-+50 HP máximo, +30% daño durante 8s. Aura visual pulsante, tinte rojo y sonidos 3D.
+---
 
-Abrazo Masa Llorosa — Stun
-Inmoviliza a un enemigo 3s. Efectos de masa viscosa, lágrimas en UI y blur de pantalla.
+## 🛠️ Tecnologías y buenas prácticas
 
-Onda Olor Putrefacto — AoE + DoT
-Daño inicial (25) + veneno (5/s durante 3s) en radio 12. Onda expansiva y partículas de gas.
+- **Luau estricto** – `--!strict` en todos los módulos.
+- **Arquitectura modular** – Separación clara entre servidor, cliente y módulos compartidos.
+- **Código limpio y comentado** – Nombres descriptivos, validaciones anti‑exploit y limpieza automática de recursos.
+- **Autocontenido** – Cada habilidad y cada sistema funciona sin dependencias externas.
 
-Desmembramiento Voluntario — Proyectil
-Lanza un brazo que causa 35 de daño al impactar. Trail de sangre e impacto alineado a superficies.
+---
 
-Nam Nam Final — Ejecución
-Si el enemigo tiene menos del 30% de HP, muerte instantánea. Explosión de sangre, trozos de carne y flash rojo.
+## 📦 ¿Qué puedo usar de este framework?
 
+- **Backend completo** – IA del director, economía, combate, duelos y evolución.
+- **6 habilidades listas** – Copia, pega y personaliza.
+- **UI reutilizable** – HUD, controladores y frames.
+- **Utilidades VFX** – Partículas, luces y efectos para tus propias habilidades.
 
-BACKEND
+---
 
-DirectorSystem
-IA que monitoriza métricas de jugadores, calcula "ira" y decide eventos dinámicos (meteoros, tormentas, cacerías).
+## 📈 ¿Por qué este framework es diferente?
 
-Economy
-Gestión de reliquias (RelicsManager) y cajas de loot con probabilidades ponderadas (MysteryBoxes).
+Porque no es una colección de scripts sueltos. Es el resultado de un **aprendizaje acelerado y aplicado**: en menos de dos meses pasé de "Hola Mundo" a diseñar sistemas modulares que normalmente requieren años de práctica.
 
+Cada línea de código está pensada para ser **leída, entendida y reutilizada**. No hay magia. Hay lógica, estructura y game feel.
 
-UI
+---
 
-HUDScript
-Interfaz generada dinámicamente por código. Muestra recursos (Entropía, Fragmentos) con cálculo de +/seg y panel de inventario desplegable.
+## 👤 Autor
 
+(Bombito / shezz‑bomb)  
+📍 Ayacucho, Perú  
+📧 elprodetico@gmail.com  
+🔗 [GitHub](https://github.com/shezz-bomb) · [Twitter/X](https://x.com/Siposo1222)
 
-POR QUÉ ESTE PORTAFOLIO
+*"No cuento años. Cuento sistemas complejos entregados."*
 
-- Modular: cada sistema funciona de forma independiente.
-- Autocontenido: las habilidades no requieren módulos externos.
-- Limpio y comentado: --!strict, validaciones anti-exploit, limpieza automática de recursos.
-- Game Feel AAA: VFX procedurales, sonidos 3D, efectos de cámara y luces dinámicas.
+---
 
+## ⚖️ Licencia
 
-AUTOR
+MIT © 2026 Bombito
 
-(Bombito / shezz-bomb)
-Roblox: @shezz-bomb
-Twitter/X: @Siposo1222
-GitHub: shezz-bomb
-
-"No cuento años. Cuento sistemas complejos entregados."
-
-
-LICENCIA
-
-MIT (c) 2026 Cristhian Ayala (Bombito)
-
-El código es libre para usar, modificar y distribuir. Mi tiempo y experiencia para adaptarlo a tu proyecto son de pago.
+El código es libre para usar, modificar y distribuir.  
+Si necesitas ayuda para integrarlo en tu proyecto, **mi tiempo y experiencia son de pago**.
