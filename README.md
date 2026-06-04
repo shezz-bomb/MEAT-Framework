@@ -44,7 +44,7 @@ Cada componente está diseñado para funcionar de forma independiente. Copias el
 
 ## 📈 ¿Por qué este framework es diferente?
 
-Porque no es una colección de scripts sueltos. Es el resultado de un **aprendizaje acelerado y aplicado**: en menos de dos meses pasé de "Hola Mundo" a diseñar sistemas modulares que normalmente requieren años de práctica.
+Porque no es una colección de scripts sueltos. Es el resultado de un **aprendizaje acelerado y aplicado**:
 
 Cada línea de código está pensada para ser **leída, entendida y reutilizada**. No hay magia. Hay lógica, estructura y game feel.
 
